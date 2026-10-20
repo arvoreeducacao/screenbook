@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Screenbook</title>
+  <link rel="icon" href="/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/devmode.css">
+  <link rel="stylesheet" href="/ui.css">
+  <link rel="stylesheet" href="/edit.css">
+  <link rel="stylesheet" href="/board.css">
+</head>
+<body>
+  <div id="viewport"><div id="world"></div><svg id="edges"></svg></div>
+
+  <header class="topbar" id="topbar">
+    <a class="tb-home" href="/" title="All products"><img class="tb-mark" src="/logo.svg" alt="Screenbook"></a>
+    <button class="icon-btn tb-panel" id="left-toggle" title="Show or hide the panel (Ctrl+\\)" aria-label="Show or hide the panel" aria-pressed="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.5 4.5v15"/></svg></button>
+    <nav class="fl tabbar" id="tabbar" hidden></nav>
+    <div class="tb-fill"></div>
+    <div class="fl zoom" id="zoom">
+      <button id="zoom-out" aria-label="Zoom out">−</button>
+      <span id="zoom-pct">100%</span>
+      <button id="zoom-in" aria-label="Zoom in">+</button>
+      <button id="zoom-fit" title="Fit all (Shift+1)">Fit</button>
+      <button id="shortcuts-open" title="Shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+    </div>
+    <div class="fl pillbar" id="top-right">
+      <div class="people" id="people" hidden></div>
+      <span class="waiting" id="waiting" hidden></span>
+      <button class="anno-toggle" id="annotations-toggle" aria-pressed="true" hidden><i class="anno-mark" aria-hidden="true">✦</i><span>AI notes</span><b>0</b></button>
+      <button class="icon-btn" id="theme" title="Light or dark mode" aria-label="Switch theme"></button>
+      <button class="me" id="me" title="Your name on comments"></button>
+    </div>
+  </header>
+
+  <aside class="fl sidebar" id="sidebar">
+    <div class="sb-head">
+      <a class="sb-home" href="/" title="All products"><img class="mark" src="/logo.svg" alt="Screenbook"></a>
+      <span class="proj" id="project-name">Screenbook</span>
+      <div class="seg icons" id="views">
+        <button data-view="canvas" class="on" title="Canvas: screens grouped by section" aria-label="Canvas"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></svg></button>
+        <button data-view="flow" title="Flow: screens linked by navigation" aria-label="Flow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="6" height="6" rx="1.5"/><rect x="15.5" y="4" width="6" height="6" rx="1.5"/><rect x="15.5" y="14" width="6" height="6" rx="1.5"/><path d="M8.5 7h7M12 7v10h3.5"/></svg></button>
+      </div>
+      <button class="icon-btn sb-toggle" id="sidebar-toggle" aria-label="Show or hide the list" aria-expanded="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
+    </div>
+    <div class="sb-body" id="sidebar-body">
+      <div class="sb-group">
+        <div class="sb-title">Layers</div>
+        <label class="ly-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg><input id="layer-search" type="search" autocomplete="off" placeholder="Search screens" aria-label="Search screens"></label>
+        <nav id="section-list" class="layers"></nav>
+      </div>
+      <div class="sb-group folded" id="proposals-group">
+        <div class="sb-title sb-fold-title" id="proposals-fold"><span><svg class="sb-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>Open proposals<b class="sb-count" id="proposals-count"></b></span><button class="sb-link" id="all-proposals" hidden>see all</button></div>
+        <nav id="proposal-list"></nav>
+      </div>
+      <div class="sb-group" id="archived-group" hidden>
+        <button class="sb-title sb-fold" id="archived-toggle" aria-expanded="false" aria-controls="archived-list"><span id="archived-title">Archived</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+        <nav id="archived-list" hidden></nav>
+      </div>
+    </div>
+  </aside>
+
+
+  <div class="page-empty" id="page-empty" hidden><b>Empty page.</b><span>Right-click a section name to bring it here.</span></div>
+
+
+  <div class="fl tools" id="tools">
+    <button data-tool="move" class="on" title="Move (V)" aria-label="Move"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M5 3.5 19 10l-6.2 1.8L10 18z"/></svg></button>
+    <button data-tool="comment" title="Comment (C): click a spot on a screen" aria-label="Comment"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3.5a8.5 8.5 0 1 1-4.2 15.9L3.5 20.5l1.1-4.3A8.5 8.5 0 0 1 12 3.5z"/></svg></button>
+    <button data-tool="sticky" title="Sticky note (N): click the canvas" aria-label="Sticky note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 4h16v10l-6 6H4z"/><path d="M14 20v-6h6"/></svg></button>
+    <button data-tool="edit" title="Edit (E): click a screen and change a piece of it" aria-label="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></svg></button>
+  </div>
+
+  <div class="fl note" id="note" hidden></div>
+
+
+  <button class="fl reader-pill" id="reader-pill" hidden></button>
+
+  <div class="fl inspector" id="inspector" hidden></div>
+
+  <div class="fl frame-bar" id="frame-bar" hidden></div>
+
+  <form class="askbar" id="askbar" hidden>
+    <span class="ask-at">@</span>
+    <input id="ask-input" autocomplete="off" placeholder="Ask @claude about this screen…">
+    <button class="btn primary sm" type="submit">Send</button>
+  </form>
+
+  <div class="empty" id="empty" hidden>
+    <div class="fl card">
+      <img class="empty-logo" src="/logo.svg" alt="">
+      <div class="eyebrow">Screenbook</div>
+      <h1>Nothing drawn yet.</h1>
+      <p>Open a chat, run <code>/screenbook</code> and ask for the first screen. It shows up here as soon as it is saved.</p>
+    </div>
+  </div>
+
+  <div class="overlay" id="overlay" hidden>
+    <header class="ov-top">
+      <button class="icon-btn" id="ov-close" aria-label="Close">✕</button>
+      <div class="ov-title"><b id="ov-name"></b><span id="ov-meta"></span></div>
+      <div class="ov-nav" id="ov-nav" hidden><button class="icon-btn" id="ov-prev" aria-label="Previous screen">‹</button><span id="ov-pos"></span><button class="icon-btn" id="ov-next" aria-label="Next screen">›</button></div>
+      <div class="seg" id="ov-versions"></div>
+      <div class="grow"></div>
+      <button class="btn sm" id="ov-play" title="Present: click through the linked screens"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l12.5-7.5z"/></svg>Present</button>
+      <button class="btn sm ov-export" id="ov-export" aria-haspopup="menu">Export</button>
+      <button class="btn sm" id="ov-compare">Compare with official</button>
+      <button class="btn sm" id="ov-comment">Comment</button>
+      <span class="vr"></span><button class="btn sm approve" id="ov-approve" hidden>✓ Approve<span class="wide-only"> this screen</span></button>
+    </header>
+    <div class="ov-body">
+      <div class="ov-stage" id="ov-stage"></div>
+      <div class="ov-zoom" id="ov-zoom"><button class="btn" id="ov-zoom-out" aria-label="Smaller">−</button><button class="btn" id="ov-zoom-fit">Fit to screen</button><button class="btn" id="ov-zoom-in" aria-label="Larger">+</button></div>
+      <div class="ov-panel">
+        <div class="seg ov-tabs" id="ov-tabs" role="tablist"><button data-panel="talk" class="on" role="tab">Conversation</button><button data-panel="inspect" role="tab" title="Inspect (I)">Inspect</button><button data-panel="history" role="tab" title="History (H)">History</button></div>
+        <aside class="ov-side" id="ov-side"></aside>
+        <aside class="ov-side" id="ov-dev" hidden></aside>
+      </div>
+    </div>
+  </div>
+
+  <dialog id="name-dialog">
+    <form method="dialog" id="name-form">
+      <h2>How should we call you?</h2>
+      <p>This name goes on your comments and approvals.</p>
+      <input id="name-input" required maxlength="40" placeholder="Your name">
+      <div class="row end"><button class="btn primary" value="ok">Save</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="approve-dialog">
+    <form method="dialog">
+      <h2 id="approve-title">Approve?</h2>
+      <p id="approve-text"></p>
+      <div class="row end"><button class="btn" id="approve-cancel" value="cancel">Cancel</button><button class="btn approve" value="approve">Approve</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="archive-dialog">
+    <form method="dialog">
+      <h2 id="archive-title">Archive this proposal?</h2>
+      <p>It leaves the open proposals and its public link stops working. Nothing is deleted: the screens and comments stay in Archived, and you can restore it.</p>
+      <input id="archive-reason" maxlength="280" placeholder="Reason (optional)">
+      <div class="row end"><button class="btn" id="archive-cancel" value="cancel">Cancel</button><button class="btn primary" value="archive">Archive</button></div>
+    </form>
+  </dialog>
+
+  <div class="fl frame-menu" id="frame-menu" hidden></div>
+
+  <div class="overlay" id="editor" hidden>
+    <header class="ov-top">
+      <button class="icon-btn" id="ed-close" aria-label="Close">✕</button>
+      <div class="ov-title"><b id="ed-name"></b><span id="ed-meta"></span></div>
+      <div class="grow"></div>
+      <span class="muted ed-count" id="ed-count"></span>
+      <button class="btn sm" id="ed-discard">Discard</button>
+      <button class="btn sm primary" id="ed-save" disabled>Save as new version</button>
+    </header>
+    <div class="ov-body">
+      <div class="ov-stage" id="ed-stage"></div>
+      <aside class="ov-side" id="ed-side"></aside>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script type="module" src="/app.js"></script>
+  <script type="module" src="/shell.js"></script>
+</body>
+</html>

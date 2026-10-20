@@ -1,0 +1,106 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${NAMESPACE}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: screenbook
+  namespace: ${NAMESPACE}
+  annotations:
+    eks.amazonaws.com/role-arn: ${STORE_ROLE_ARN}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: screenbook
+  namespace: ${NAMESPACE}
+  labels:
+    app: screenbook
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: screenbook
+  template:
+    metadata:
+      labels:
+        app: screenbook
+    spec:
+      serviceAccountName: screenbook
+      nodeSelector:
+        kubernetes.io/arch: arm64
+      containers:
+        - name: web
+          image: ${IMAGE}
+          ports:
+            - containerPort: 4600
+          env:
+            - name: SCREENBOOK_STORE
+              value: ${STORE}
+            - name: SCREENBOOK_ACCESS_REPO
+              value: ${ACCESS_REPO}
+            - name: AWS_REGION
+              value: ${AWS_REGION}
+            - name: SCREENBOOK_PUBLIC_URL
+              value: https://${HOST}
+          envFrom:
+            - secretRef:
+                name: screenbook
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 4600
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 4600
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 250m
+              memory: 768Mi
+            limits:
+              memory: 3Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: screenbook
+  namespace: ${NAMESPACE}
+spec:
+  selector:
+    app: screenbook
+  ports:
+    - port: 80
+      targetPort: 4600
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: screenbook
+  namespace: ${NAMESPACE}
+  annotations:
+    alb.ingress.kubernetes.io/group.name: ${ALB_GROUP}
+    alb.ingress.kubernetes.io/certificate-arn: ${CERTIFICATE_ARN}
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80, "HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    external-dns.alpha.kubernetes.io/hostname: ${HOST}
+spec:
+  ingressClassName: alb
+  rules:
+    - host: ${HOST}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: screenbook
+                port:
+                  number: 80
