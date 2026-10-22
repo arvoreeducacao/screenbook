@@ -464,3 +464,8 @@ body:has(#inspector:not([hidden])) .minimap, body:has(#ai-panel:not([hidden]):no
 .connect-card h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
 .connect-card p { font-size: 13px; line-height: 1.5; color: var(--ink-2); }
 .connect-card .btn { align-self: flex-start; font-size: 13px; padding: 8px 14px; }
+.device-filter { display: flex; gap: 2px; padding: 2px; margin-left: 4px; border-radius: 10px; background: var(--sunk); }
+.tools .device-filter button { width: auto; min-width: 28px; height: 28px; padding: 0 8px; border-radius: 8px; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.tools .device-filter button.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-btn); }
+.tools .device-filter button:disabled { opacity: .35; cursor: not-allowed; background: none; box-shadow: none; }
+.tools .device-filter svg { width: 16px; height: 16px; }
