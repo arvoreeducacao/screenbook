@@ -19,7 +19,7 @@ export function matchesScreen(screen, query) {
   return words.every((word) => haystack.includes(word));
 }
 
-export function createLayers({ state, list, search, tabs, focusSection, focusPlaced, focusProposal, onPick, board = () => null }) {
+export function createLayers({ state, list, search, tabs, focusSection, focusPlaced, focusProposal, showAllDevices = () => {}, onPick, board = () => null }) {
   const open = new Set();
   let query = "";
 
@@ -47,6 +47,10 @@ export function createLayers({ state, list, search, tabs, focusSection, focusPla
     if (!placed) {
       const proposal = latestProposal(screen);
       if (proposal) focusProposal(proposal.id);
+      placed = placedOf(screenId);
+    }
+    if (!placed && state.device !== "all") {
+      showAllDevices();
       placed = placedOf(screenId);
     }
     if (!placed) return false;

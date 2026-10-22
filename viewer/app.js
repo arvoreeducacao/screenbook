@@ -2530,6 +2530,10 @@ const layers = createLayers({
     select(placed.item);
   },
   focusProposal: (id) => focusOn(id),
+  showAllDevices: () => {
+    state.device = "all";
+    render();
+  },
   onPick: collapseOnPhone,
   board: () => {
     try {
