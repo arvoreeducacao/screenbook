@@ -73,6 +73,12 @@
     <button data-tool="comment" title="Comment (C): click a spot on a screen" aria-label="Comment"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3.5a8.5 8.5 0 1 1-4.2 15.9L3.5 20.5l1.1-4.3A8.5 8.5 0 0 1 12 3.5z"/></svg></button>
     <button data-tool="sticky" title="Sticky note (N): click the canvas" aria-label="Sticky note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 4h16v10l-6 6H4z"/><path d="M14 20v-6h6"/></svg></button>
     <button data-tool="edit" title="Edit (E): click a screen and change a piece of it" aria-label="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></svg></button>
+    <span class="tools-sep" aria-hidden="true"></span>
+    <div class="device-filter" id="device-filter" role="radiogroup" aria-label="Show screens">
+      <button data-device="all" class="on" role="radio" aria-checked="true" title="All screens">All</button>
+      <button data-device="mobile" role="radio" aria-checked="false" title="Phone screens only" aria-label="Phone"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 17.5h2"/></svg></button>
+      <button data-device="desktop" role="radio" aria-checked="false" title="Desktop screens only" aria-label="Desktop"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="12" rx="1.5"/><path d="M9 20h6M12 16.5V20"/></svg></button>
+    </div>
   </div>
 
   <div class="fl note" id="note" hidden></div>

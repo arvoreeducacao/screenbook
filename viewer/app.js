@@ -28,6 +28,7 @@ const MAX_PER_ROW = 18;
 const ROW_GAP = 70;
 const VARIANT_GAP = 48;
 const TALL_FRAME = FRAME_WIDTH * 3;
+const PHONE_MAX_WIDTH = 600;
 const SECTION_PAD = 72;
 const SECTION_GAP = 260;
 const ANNO_GAP = 40;
@@ -67,6 +68,7 @@ const state = {
   annotation: null,
   showAnnotations: true,
   archivedOpen: false,
+  device: "all",
 };
 
 function storageGet(key) {
@@ -196,6 +198,47 @@ function applyTheme(theme) {
 
 function versionEntry(screen, version) {
   return screen.versions.find((entry) => entry.v === version);
+}
+
+function deviceOf(item) {
+  const entry = versionEntry(item.screen, item.version);
+  return entry && entry.width <= PHONE_MAX_WIDTH ? "mobile" : "desktop";
+}
+
+function showsDevice(item) {
+  return state.device === "all" || deviceOf(item) === state.device;
+}
+
+function availableDevices() {
+  const found = new Set();
+  for (const screen of state.data?.screens ?? []) {
+    if (!tabs.visible(screen.section)) continue;
+    for (const item of itemsFor(screen)) found.add(deviceOf(item));
+  }
+  return found;
+}
+
+function renderDeviceFilter() {
+  const found = availableDevices();
+  if (state.device !== "all" && !found.has(state.device)) state.device = "all";
+  const both = found.size > 1;
+  document.querySelectorAll("#device-filter [data-device]").forEach((button) => {
+    const device = button.dataset.device;
+    const on = device === state.device;
+    button.classList.toggle("on", on);
+    button.setAttribute("aria-checked", String(on));
+    button.disabled = device !== "all" && !both;
+    button.title = button.disabled
+      ? t(found.has(device) ? "Every screen here is already this size" : device === "mobile" ? "No phone screens here" : "No desktop screens here")
+      : t(device === "all" ? "All screens" : device === "mobile" ? "Phone screens only" : "Desktop screens only");
+  });
+}
+
+function setDevice(device) {
+  if (device === state.device) return;
+  state.device = device;
+  render();
+  fit();
 }
 
 function screenById(id) {
@@ -380,7 +423,7 @@ function renderCanvas() {
   for (const { section, groups } of arrange(project.sections, screens)) {
     if (!tabs.visible(section.id)) continue;
     const columns = groups
-      .map((group) => [group.screen, ...group.variants].map(itemsFor).filter((row) => row.length))
+      .map((group) => [group.screen, ...group.variants].map((screen) => itemsFor(screen).filter(showsDevice)).filter((row) => row.length))
       .filter((rows) => rows.length)
       .map((rows) => (rows.flat().some((item) => frameHeight(item) > TALL_FRAME) ? [rows.flat()] : rows));
     const items = columns.flat(2);
@@ -443,7 +486,7 @@ function renderFlow() {
   world.querySelectorAll(".frame, .section").forEach((node) => node.remove());
   edges.innerHTML = "";
   state.placed = [];
-  const screens = state.data.screens.filter((screen) => screen.versions.length && tabs.visible(screen.section));
+  const screens = state.data.screens.filter((screen) => screen.versions.length && tabs.visible(screen.section) && showsDevice({ screen, version: screen.official ?? screen.versions.at(-1).v }));
   const flows = state.data.flows.filter((flow) => screenById(flow.from) && screenById(flow.to));
   const depth = new Map();
   const incoming = new Set(flows.map((flow) => flow.to));
@@ -513,6 +556,7 @@ function render() {
   waitingElement.hidden = !waiting.length;
   waitingElement.textContent = t(waiting.length === 1 ? "{n} mention waiting for a chat" : "{n} mentions waiting for a chat", { n: waiting.length });
   renderAnnotationToggle();
+  renderDeviceFilter();
   $("#empty").hidden = screens.length > 0;
   tabs.render();
   const onBoard = isBoard(tabs.current());
@@ -817,7 +861,7 @@ function renderPins() {
 
 function setTool(tool) {
   state.tool = tool;
-  document.querySelectorAll("#tools button").forEach((button) => button.classList.toggle("on", button.dataset.tool === tool));
+  document.querySelectorAll("#tools [data-tool]").forEach((button) => button.classList.toggle("on", button.dataset.tool === tool));
   viewport.classList.toggle("commenting", tool === "comment");
   viewport.classList.toggle("editing", tool === "edit");
   viewport.classList.toggle("noting", tool === "sticky");
@@ -2717,7 +2761,8 @@ document.querySelectorAll("#ov-tabs [data-panel]").forEach((button) => button.ad
 $("#ov-play").addEventListener("click", () => startPresenting(state.overlay.screenId, state.overlay.version));
 $("#ov-export").addEventListener("click", openExportMenu);
 
-document.querySelectorAll("#tools button").forEach((button) => button.addEventListener("click", () => setTool(button.dataset.tool)));
+document.querySelectorAll("#tools [data-tool]").forEach((button) => button.addEventListener("click", () => setTool(button.dataset.tool)));
+document.querySelectorAll("#device-filter [data-device]").forEach((button) => button.addEventListener("click", () => setDevice(button.dataset.device)));
 
 $("#all-proposals").addEventListener("click", () => focusOn(state.focus === "all" ? null : "all"));
 $("#archived-toggle").addEventListener("click", () => {
