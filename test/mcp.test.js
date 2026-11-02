@@ -161,6 +161,18 @@ test("read_screen falls back to the latest version and carries the comments", as
   assert.equal(result.content[2].type, "image");
 });
 
+test("read_screen lists where the screen leads and where people come from", async () => {
+  const { tools } = await setup();
+  for (const name of ["List", "Detail", "Edit"]) await tools.write_screen.run({ proposal: "p", name, section: "Deals", html: `<p>${name}</p>` });
+  await tools.link_screens.run({ from: "list", el: "row", to: "detail", label: "Open" });
+  await tools.link_screens.run({ from: "detail", el: "edit", to: "edit", label: "Edit" });
+  const info = JSON.parse((await tools.read_screen.run({ screen: "detail" })).content[0].text);
+  assert.deepEqual(info.links, { leadsTo: [{ el: "edit", to: "edit", label: "Edit" }], comesFrom: [{ from: "list", el: "row", label: "Open" }] });
+  await tools.link_screens.run({ from: "list", to: "detail", remove: true });
+  const after = JSON.parse((await tools.read_screen.run({ screen: "detail" })).content[0].text);
+  assert.deepEqual(after.links.comesFrom, []);
+});
+
 test("approve makes the proposal official in the agent's name, with the reason", async () => {
   const { book, tools } = await setup();
   await tools.write_screen.run({ proposal: "p", name: "List", section: "Orders", html: "<p>a</p>" });

@@ -104,6 +104,21 @@ test("links are kept once per piece and destination", async () => {
   await assert.rejects(book.link({ from: "list", to: "missing" }), /no screen/);
 });
 
+test("a wrong link can be removed, by piece or all at once", async () => {
+  const book = await freshBook();
+  await book.writeScreen({ proposal: "p", name: "List", section: "S", html: "<p>a</p>" });
+  await book.writeScreen({ proposal: "p", name: "Detail", section: "S", html: "<p>b</p>" });
+  await book.link({ from: "list", el: "card", to: "detail" });
+  await book.link({ from: "list", el: "title", to: "detail" });
+  await book.link({ from: "list", to: "detail" });
+  await book.link({ from: "list", to: "detail" });
+  assert.equal((await book.flows()).length, 3);
+  assert.deepEqual(await book.link({ from: "list", el: "card", to: "detail", remove: true }), { from: "list", to: "detail", removed: 1 });
+  assert.deepEqual(await book.link({ from: "list", to: "detail", remove: true }), { from: "list", to: "detail", removed: 2 });
+  assert.deepEqual(await book.flows(), []);
+  await assert.rejects(book.link({ from: "list", to: "detail", remove: true }), /no link/);
+});
+
 test("the local store refuses paths outside its folder", async () => {
   const book = await freshBook();
   await assert.rejects(book.store.read("../../etc/passwd"), /escapes the store/);
