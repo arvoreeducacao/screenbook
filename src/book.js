@@ -28,7 +28,35 @@ const SHARE_DAYS = 30;
 const GUIDE_LIMIT = 12000;
 const SHARE_TOKEN = /^[\w-]{16,64}$/;
 
-const PART_TAG = /<sb-part\s+name=["']([\w-]+)["']\s*(?:\/>|>\s*<\/sb-part>)/g;
+const PART_TAG = /<sb-part\b([^>]*?)\s*(?:\/>|>\s*<\/sb-part>)/g;
+const PART_ATTR = /([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+
+export function partRefs(html) {
+  const refs = [];
+  for (const match of String(html ?? "").matchAll(PART_TAG)) {
+    const attrs = {};
+    for (const [, key, double, single] of match[1].matchAll(PART_ATTR)) attrs[key.toLowerCase()] = double ?? single ?? "";
+    if (attrs.name && slug(attrs.name)) refs.push({ name: slug(attrs.name), attrs });
+  }
+  return refs;
+}
+
+function escapeAttr(value) {
+  return String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+
+export function partTag(name, attrs = {}) {
+  const extra = Object.entries(attrs).filter(([key]) => key !== "name");
+  return `<sb-part name="${name}"${extra.map(([key, value]) => ` ${key}="${escapeAttr(value)}"`).join("")}></sb-part>`;
+}
+
+function placePart(id, version, content, attrs) {
+  const extra = Object.entries(attrs).filter(([key]) => key !== "name");
+  const body = extra.length
+    ? `<div data-sb-part="${id}" ${extra.map(([key, value]) => `${key.startsWith("data-") ? key : `data-${key}`}="${escapeAttr(value)}"`).join(" ")} style="display:contents">${content}</div>`
+    : content;
+  return `<!--sb-part ${id} v${version}-->${body}<!--/sb-part ${id}-->`;
+}
 
 function newId() {
   return randomUUID().slice(0, 8);
@@ -307,10 +335,22 @@ export class Book {
     return buffer.toString("utf8");
   }
 
+  follows(meta, entry) {
+    return Boolean(entry) && entry.v === meta.versions.at(-1)?.v && meta.official !== entry.v && !meta.archived;
+  }
+
+  async bodyHtml(id, version) {
+    const source = await this.screenHtml(id, version);
+    if (!partRefs(source).length) return source;
+    const meta = await this.readJson(`screens/${id}/meta.json`);
+    const entry = meta?.versions.find((item) => item.v === version);
+    return this.expandParts(source, entry && !this.follows(meta, entry) ? (entry.parts ?? {}) : {});
+  }
+
   async composedHtml(id, version) {
     const project = await this.project();
     const head = project.head ? ((await this.store.read(project.head))?.toString("utf8") ?? "") : "";
-    const body = await this.screenHtml(id, version);
+    const body = await this.bodyHtml(id, version);
     if (/<html[\s>]/i.test(body)) {
       return head && /<head[^>]*>/i.test(body) ? body.replace(/<head[^>]*>/i, (tag) => `${tag}\n${head}`) : body;
     }
@@ -324,28 +364,243 @@ export class Book {
 
   async parts() {
     const paths = await this.store.list("parts");
-    return paths.filter((path) => path.endsWith(".html")).map((path) => path.slice("parts/".length, -".html".length));
+    const ids = new Set();
+    for (const path of paths) {
+      const rest = path.slice("parts/".length);
+      if (/^[\w-]+\.html$/.test(rest)) ids.add(rest.slice(0, -".html".length));
+      else if (/^[\w-]+\/meta\.json$/.test(rest)) ids.add(rest.split("/")[0]);
+    }
+    return [...ids].sort();
   }
 
-  async writePart(name, html) {
-    return this.saving(`saved the part ${slug(name)}`, async () => {
+  async partMeta(name) {
+    const id = slug(name);
+    if (!id) return null;
+    const meta = await this.readJson(`parts/${id}/meta.json`);
+    if (meta) return meta;
+    const legacy = await this.store.read(`parts/${id}.html`);
+    return legacy ? { id, name: id, legacy: true, versions: [{ v: 1, at: null, by: null }] } : null;
+  }
+
+  async partHtml(name, version) {
+    const id = slug(name);
+    const buffer = (await this.store.read(`parts/${id}/v${version}.html`)) ?? (version === 1 ? await this.store.read(`parts/${id}.html`) : null);
+    if (!buffer) throw new Error(`part "${id}" has no version ${version}`);
+    return buffer.toString("utf8");
+  }
+
+  async writePart(name, html, { by = "agent", note = null } = {}) {
+    return this.saving((saved) => `${by} saved the part ${saved?.part} v${saved?.version}`, async () => {
       const id = slug(name);
       if (!id) throw new Error("a part needs a name");
       if (!html?.trim()) throw new Error("html is empty");
-      await this.store.write(`parts/${id}.html`, html);
-      return { part: id, use: `<sb-part name="${id}"></sb-part>` };
+      if (partRefs(html).length) throw new Error("a part cannot hold another <sb-part>; write the pieces side by side in the screen");
+      const found = await this.partMeta(id);
+      const meta = found && !found.legacy ? found : { id, name: found?.name ?? name, versions: found?.versions ?? [] };
+      const last = meta.versions.at(-1);
+      const use = partTag(id);
+      if (last && (await this.partHtml(id, last.v)) === html) return { part: id, version: last.v, changed: false, use };
+      const version = (last?.v ?? 0) + 1;
+      meta.versions.push({ v: version, at: now(), by, ...(note ? { note } : {}) });
+      await this.store.write(`parts/${id}/v${version}.html`, html);
+      await this.writeJson(`parts/${id}/meta.json`, meta);
+      return { part: id, version, changed: true, use };
     });
   }
 
-  async expandParts(html) {
-    const names = [...html.matchAll(PART_TAG)].map((match) => match[1]);
-    const contents = new Map();
-    for (const name of new Set(names)) {
-      const buffer = await this.store.read(`parts/${slug(name)}.html`);
-      if (!buffer) throw new Error(`no part called "${name}"; write it with write_part first`);
-      contents.set(name, buffer.toString("utf8"));
+  async pinParts(html) {
+    const pins = {};
+    for (const name of new Set(partRefs(html).map((ref) => ref.name))) {
+      const meta = await this.partMeta(name);
+      if (!meta) throw new Error(`no part called "${name}"; write it with write_part first`);
+      pins[name] = meta.versions.at(-1).v;
     }
-    return html.replace(PART_TAG, (_, name) => contents.get(name));
+    return pins;
+  }
+
+  async expandParts(html, pinned = {}) {
+    const refs = partRefs(html);
+    if (!refs.length) return html;
+    const versions = {};
+    for (const name of new Set(refs.map((ref) => ref.name))) {
+      const meta = await this.partMeta(name);
+      if (!meta) throw new Error(`no part called "${name}"; write it with write_part first`);
+      const wanted = pinned?.[name];
+      versions[name] = wanted && meta.versions.some((entry) => entry.v === wanted) ? wanted : meta.versions.at(-1).v;
+    }
+    const contents = new Map(await Promise.all(Object.entries(versions).map(async ([name, version]) => [name, await this.partHtml(name, version)])));
+    return String(html).replace(PART_TAG, (whole) => {
+      const [ref] = partRefs(whole);
+      return ref ? placePart(ref.name, versions[ref.name], contents.get(ref.name), ref.attrs) : whole;
+    });
+  }
+
+  async partUsage(screens = null) {
+    const all = screens ?? (await this.screens());
+    const usage = new Map();
+    const newest = new Map();
+    const latestOf = async (name) => {
+      if (!newest.has(name)) newest.set(name, (await this.partMeta(name))?.versions.at(-1)?.v ?? null);
+      return newest.get(name);
+    };
+    for (const meta of all) {
+      if (meta.archived) continue;
+      const current = new Set([meta.official, meta.versions.at(-1)?.v].filter(Boolean));
+      for (const entry of meta.versions) {
+        if (!current.has(entry.v) || !entry.parts) continue;
+        const follows = this.follows(meta, entry);
+        for (const [name, pinned] of Object.entries(entry.parts)) {
+          const latest = await latestOf(name);
+          const shown = follows ? latest : pinned;
+          const official = meta.official === entry.v;
+          const outdated = official && Boolean(latest) && shown < latest && !(entry.kept?.[name] >= latest);
+          if (!usage.has(name)) usage.set(name, []);
+          usage.get(name).push({ screen: meta.id, number: meta.number ?? null, name: meta.name, version: entry.v, official, follows, shown, latest, outdated });
+        }
+      }
+    }
+    return usage;
+  }
+
+  summarizeUsage(rows = []) {
+    return {
+      screens: new Set(rows.map((row) => row.screen)).size,
+      following: rows.filter((row) => row.follows).length,
+      official: rows.filter((row) => row.official).length,
+      outdated: rows.filter((row) => row.outdated).length,
+    };
+  }
+
+  async components() {
+    const [ids, screens] = await Promise.all([this.parts(), this.screens()]);
+    const usage = await this.partUsage(screens);
+    return Promise.all(
+      ids.map(async (id) => {
+        const meta = await this.partMeta(id);
+        return { id, name: meta?.name ?? id, legacy: Boolean(meta?.legacy), version: meta?.versions.at(-1)?.v ?? 1, versions: meta?.versions ?? [], ...this.summarizeUsage(usage.get(id)) };
+      }),
+    );
+  }
+
+  async component(name, version = null) {
+    const id = slug(name);
+    const meta = await this.partMeta(id);
+    if (!meta) throw new Error(`no part called "${name}"`);
+    const chosen = version ?? meta.versions.at(-1).v;
+    const usage = (await this.partUsage()).get(id) ?? [];
+    return { id, name: meta.name ?? id, legacy: Boolean(meta.legacy), version: chosen, latest: meta.versions.at(-1).v, versions: meta.versions, html: await this.partHtml(id, chosen), usage, ...this.summarizeUsage(usage) };
+  }
+
+  async partHtmlPage(name, version) {
+    const project = await this.project();
+    const head = project.head ? ((await this.store.read(project.head))?.toString("utf8") ?? "") : "";
+    const meta = await this.partMeta(name);
+    if (!meta) throw new Error(`no part called "${name}"`);
+    const body = await this.partHtml(name, version ?? meta.versions.at(-1).v);
+    return `<!doctype html>\n<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">\n${head}\n</head><body>\n${body}\n</body></html>\n`;
+  }
+
+  async officialEntry(screen) {
+    const meta = await this.screen(screen);
+    if (!meta.official) throw new Error(`"${screen}" has no official version; a proposal follows its parts by itself`);
+    const entry = meta.versions.find((item) => item.v === meta.official);
+    if (!entry?.parts) throw new Error(`v${meta.official} of "${screen}" uses no shared part`);
+    return { meta, entry };
+  }
+
+  async updateParts({ screen, by = "agent" }) {
+    return this.saving(`${by} brought the parts of ${screen} up to date`, async () => {
+      const { meta, entry } = await this.officialEntry(screen);
+      const changed = [];
+      for (const [name, pinned] of Object.entries(entry.parts)) {
+        const latest = (await this.partMeta(name))?.versions.at(-1)?.v;
+        if (latest && latest !== pinned) changed.push({ part: name, from: pinned, to: latest });
+      }
+      if (!changed.length) return { screen, version: entry.v, changed };
+      for (const item of changed) {
+        entry.parts[item.part] = item.to;
+        if (entry.kept) delete entry.kept[item.part];
+      }
+      if (entry.kept && !Object.keys(entry.kept).length) delete entry.kept;
+      entry.repinned = [...(entry.repinned ?? []), ...changed.map((item) => ({ ...item, by, at: now() }))];
+      delete entry.shot;
+      await this.writeJson(`screens/${screen}/meta.json`, meta);
+      return { screen, version: entry.v, changed };
+    });
+  }
+
+  async keepParts({ screen, by = "agent" }) {
+    return this.saving(`${by} kept the parts of ${screen} as they are`, async () => {
+      const { meta, entry } = await this.officialEntry(screen);
+      const kept = {};
+      for (const name of Object.keys(entry.parts)) {
+        const latest = (await this.partMeta(name))?.versions.at(-1)?.v;
+        if (latest && latest !== entry.parts[name]) kept[name] = latest;
+      }
+      if (!Object.keys(kept).length) return { screen, version: entry.v, kept };
+      entry.kept = { ...(entry.kept ?? {}), ...kept };
+      await this.writeJson(`screens/${screen}/meta.json`, meta);
+      return { screen, version: entry.v, kept };
+    });
+  }
+
+  async linkCopies({ part, dryRun = false, by = "agent" }) {
+    return this.saving(`${by} linked the copies of ${slug(part)}`, async () => {
+      const id = slug(part);
+      const meta = await this.partMeta(id);
+      if (!meta) throw new Error(`no part called "${part}"`);
+      const versions = await Promise.all(meta.versions.map(async (entry) => ({ v: entry.v, html: await this.partHtml(id, entry.v) })));
+      const candidates = versions.filter((item) => item.html.trim().length >= 40).sort((a, b) => b.html.length - a.html.length);
+      const linked = [];
+      for (const screenMeta of await this.screens()) {
+        if (screenMeta.archived) continue;
+        const current = new Set([screenMeta.official, screenMeta.versions.at(-1)?.v].filter(Boolean));
+        let touched = false;
+        for (const entry of screenMeta.versions) {
+          if (!current.has(entry.v)) continue;
+          let source = await this.screenHtml(screenMeta.id, entry.v);
+          let count = 0;
+          let pinned = null;
+          for (const candidate of candidates) {
+            const pieces = source.split(candidate.html);
+            if (pieces.length < 2) continue;
+            count += pieces.length - 1;
+            pinned = pinned ?? candidate.v;
+            source = pieces.join(partTag(id));
+          }
+          if (!count) continue;
+          linked.push({ screen: screenMeta.id, number: screenMeta.number, version: entry.v, official: screenMeta.official === entry.v, copies: count, pinned });
+          if (dryRun) continue;
+          await this.store.write(`screens/${screenMeta.id}/v${entry.v}.html`, source);
+          entry.parts = { ...(entry.parts ?? {}), [id]: pinned };
+          entry.linked = [...(entry.linked ?? []), { part: id, by, at: now() }];
+          touched = true;
+        }
+        if (touched) {
+          const { number, ...stored } = screenMeta;
+          await this.writeJson(`screens/${screenMeta.id}/meta.json`, stored);
+        }
+      }
+      return { part: id, dryRun, screens: new Set(linked.map((item) => item.screen)).size, linked };
+    });
+  }
+
+  async shotIsStale(id, version) {
+    const meta = await this.readJson(`screens/${id}/meta.json`);
+    const entry = meta?.versions.find((item) => item.v === version);
+    if (!entry?.parts) return false;
+    const wanted = await this.shownParts(meta, entry);
+    return JSON.stringify(wanted) !== JSON.stringify(entry.shot ?? null);
+  }
+
+  async shownParts(meta, entry) {
+    if (!entry?.parts) return null;
+    const follows = this.follows(meta, entry);
+    const shown = {};
+    for (const name of Object.keys(entry.parts).sort()) {
+      shown[name] = follows ? ((await this.partMeta(name))?.versions.at(-1)?.v ?? entry.parts[name]) : entry.parts[name];
+    }
+    return shown;
   }
 
   async editedHtml(id, meta, edits) {
@@ -370,8 +625,9 @@ export class Book {
       const base = variantOf ? await this.variantBase(id, variantOf) : null;
       if (!previous && !section && !base) throw new Error(`"${id}" is a new screen: pass section so it lands somewhere on the canvas`);
       const source = edits?.length ? await this.editedHtml(id, previous, edits) : html;
-      const finalHtml = await this.expandParts(source);
-      if (amend) return this.amendLatest({ id, meta: previous, proposalId, html: finalHtml, width, height, by });
+      const parts = await this.pinParts(source);
+      const finalHtml = source;
+      if (amend) return this.amendLatest({ id, meta: previous, proposalId, html: finalHtml, parts, width, height, by });
       const meta = previous ?? { id, name: name ?? screen, section: null, route: null, official: null, versions: [] };
       if (name) meta.name = name;
       if (route) meta.route = route;
@@ -386,7 +642,7 @@ export class Book {
         width: width ?? meta.versions.at(-1)?.width ?? DESKTOP.width,
         height: height ?? meta.versions.at(-1)?.height ?? DESKTOP.height,
       };
-      meta.versions.push({ v: version, proposal: proposalId, at: now(), by, ...size });
+      meta.versions.push({ v: version, proposal: proposalId, at: now(), by, ...size, ...(Object.keys(parts).length ? { parts } : {}) });
       await this.store.write(`screens/${id}/v${version}.html`, finalHtml);
       await this.writeJson(`screens/${id}/meta.json`, meta);
       if (after !== undefined) await this.place(id, after);
@@ -510,7 +766,7 @@ export class Book {
     return meta;
   }
 
-  async amendLatest({ id, meta, proposalId, html, width, height, by }) {
+  async amendLatest({ id, meta, proposalId, html, parts = {}, width, height, by }) {
     const last = meta?.versions.at(-1);
     if (!last) throw new Error(`"${id}" has no version to amend; draw it without amend`);
     if (last.proposal !== proposalId) throw new Error(`v${last.v} of "${id}" belongs to proposal "${last.proposal}", not "${proposalId}"; draw a new version instead`);
@@ -519,6 +775,9 @@ export class Book {
     if (commented) throw new Error(`someone already commented on v${last.v} of "${id}"; draw a new version so the conversation keeps what it was about`);
     last.at = now();
     last.by = by;
+    if (Object.keys(parts).length) last.parts = parts;
+    else delete last.parts;
+    delete last.shot;
     if (width) last.width = width;
     if (height) last.height = height;
     await this.store.write(`screens/${id}/v${last.v}.html`, html);
@@ -578,7 +837,7 @@ export class Book {
       copy.copiedFrom = { screen, version: from };
       copy.variantOf = screen;
       await this.writeJson(`screens/${id}/meta.json`, copy);
-      const png = await this.png(screen, from);
+      const png = copy.versions.at(-1)?.parts ? null : await this.png(screen, from);
       if (png) await this.savePng(id, written.version, png);
       return written;
     });
@@ -620,7 +879,7 @@ export class Book {
         last.restoredFrom = version;
         await this.writeJson(`screens/${screen}/meta.json`, restored);
       }
-      const png = await this.png(screen, version);
+      const png = last?.parts ? null : await this.png(screen, version);
       if (png) await this.savePng(screen, written.version, png);
       return { ...written, restoredFrom: version };
     });
@@ -629,6 +888,11 @@ export class Book {
   async savePng(id, version, png) {
     return this.saving(`screenshot of ${id} v${version}`, async () => {
       await this.store.write(`screens/${id}/v${version}.png`, png);
+      const meta = await this.readJson(`screens/${id}/meta.json`);
+      const entry = meta?.versions.find((item) => item.v === version);
+      if (!entry?.parts) return;
+      entry.shot = await this.shownParts(meta, entry);
+      await this.writeJson(`screens/${id}/meta.json`, meta);
     });
   }
 
@@ -670,6 +934,11 @@ export class Book {
         const meta = await this.screen(screenId);
         archived.delete(screenId);
         approved[screenId] = { by, at: now(), replaced: meta.official ?? null, ...(reason ? { reason } : {}) };
+        const entry = meta.versions.find((item) => item.v === record.screens[screenId]);
+        if (entry?.parts) {
+          const shown = await this.shownParts(meta, entry);
+          if (shown) entry.parts = shown;
+        }
         meta.official = record.screens[screenId];
         delete meta.archived;
         await this.writeJson(`screens/${screenId}/meta.json`, meta);
@@ -1197,6 +1466,10 @@ export class Book {
     ]);
     const pending = handle ? waiting.filter((mention) => mention.handle === handle.toLowerCase()) : [];
     const archived = screens.filter((screen) => screen.archived).map(({ id, name, number, versions, archived: stamp }) => ({ id, name, number, version: versions.at(-1)?.v ?? null, ...stamp }));
-    return { project, screens: screens.filter((screen) => !screen.archived), archived, proposals, flows, pending, waiting, comments: await this.commentCounts(notes), annotations: this.annotationCounts(notes), notes, parts, shares, stickies };
+    const usage = await this.partUsage(screens);
+    const components = [...usage.entries()].map(([id, rows]) => ({ id, latest: rows[0]?.latest ?? null, ...this.summarizeUsage(rows) }));
+    const outdated = {};
+    for (const [id, rows] of usage) for (const row of rows) if (row.outdated) (outdated[row.screen] ??= []).push({ part: id, shown: row.shown, latest: row.latest });
+    return { project, screens: screens.filter((screen) => !screen.archived), archived, proposals, flows, pending, waiting, comments: await this.commentCounts(notes), annotations: this.annotationCounts(notes), notes, parts, components, outdated, shares, stickies };
   }
 }

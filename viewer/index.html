@@ -48,8 +48,12 @@
       <button class="icon-btn sb-toggle" id="sidebar-toggle" aria-label="Show or hide the list" aria-expanded="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
     </div>
     <div class="sb-body" id="sidebar-body">
-      <div class="sb-group">
-        <div class="sb-title">Layers</div>
+      <div class="seg sb-tabs" id="side-tabs" role="tablist">
+        <button data-side="layers" class="on" role="tab" aria-selected="true">Layers</button>
+        <button data-side="components" role="tab" aria-selected="false">Components</button>
+      </div>
+      <div class="sb-group" id="components-group" hidden></div>
+      <div class="sb-group" id="layers-group">
         <label class="ly-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg><input id="layer-search" type="search" autocomplete="off" placeholder="Search screens" aria-label="Search screens"></label>
         <nav id="section-list" class="layers"></nav>
       </div>

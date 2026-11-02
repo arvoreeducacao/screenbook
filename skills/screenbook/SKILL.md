@@ -27,7 +27,7 @@ Then sweep the open proposals. Whoever drew a proposal is rarely around when its
 
 1. For each open proposal, find the PRs that link it: `gh search prs --owner <org> "proposal=<id>" --json repository,number,state,title`.
 2. No merged PR: leave it open.
-3. Merged PR: read its description to learn which screens and which option were built. Approve those screens one by one, with the PR in `reason`. Archive the options that lost. Screens the PR says were left for later stay open.
+3. Merged PR: read its description to learn which screens and which option were built. Approve those screens one by one, with the PR in `reason`. Archive the options that lost. Screens the PR says were left for later stay open. If the PR shipped a component change, also `update_parts` the official screens that wait for it (`outdated` in `open_project`).
 4. Tell the user in one line what you approved and archived, and which proposals are still waiting for code.
 
 Call `approve` and `archive` one at a time, never in parallel: concurrent writes to the same proposal overwrite each other and an approval silently disappears. Check the `approved` list each call returns.
@@ -69,7 +69,7 @@ Every screen has a number, shown on the canvas next to its name (the `#number` i
 - A state of a screen (empty, loading, error, with or without some piece, another role) is a variation of it, not a new screen of the flow. Draw it with `variant_of` set to the base screen: the canvas stacks it below that screen, in its section. A tall screen (a landing page, a long scrolling page, anything taller than about three times its width) keeps its variations side by side instead, so the canvas does not become one endless column; the canvas does this on its own. Name it with the base name first and the difference after it: "Order list", "Order list · empty", "Order list · filtered". Duplicating a screen in the browser already makes a variation of it.
 - When a person asks to reorganize the canvas, or a section has grown out of order, call `arrange` with the sections in the order of the product and each one's screens in the order of the flow, variations nested under their base. Listing one section reorders only that section. Screen numbers never change, so people's references stay valid.
 - Plain HTML. If the project has a shared `head.html` (fonts, CSS variables), it is added around your HTML; use its variables. If there is none, put the product's styles inline in the screen.
-- Pieces that repeat across screens (sidebar, top bar) are parts: save one with `write_part` and write `<sb-part name="sidebar"></sb-part>` where it goes. `open_project` lists the parts that exist; use them instead of copying.
+- Pieces that repeat across screens are **components** (shared parts): the sidebar, the top bar, CSS the product's `head.html` lacks. A product keeps **one component per role**, named after the role (`sidebar`, `topbar`, `styles`), never after a mission or a version (`checkout-sidebar`, `rail-v2`). See section 5b.
 - Small fix: pass `edits` (`old_string`/`new_string`) instead of resending the whole html.
 - Fixing your own draft that nobody commented on yet: pass `amend: true`, so the broken try does not stay in the history people review. Once someone commented on a version, draw a new one.
 - Put `data-el="stable-name"` on every piece people may comment on: buttons, fields, cards, rows, notices. The name describes the piece (`place-order`), never its look, and never changes between versions; comments are pinned to it.
@@ -77,6 +77,18 @@ Every screen has a number, shown on the canvas next to its name (the `#number` i
 - Realistic made-up data in the product's language. Never real names of people or customers, tokens or production data.
 - When a piece leads to another screen, record it with `link_screens` so the flow map shows the path.
 - Never write explanations inside the screen HTML: no dashed boxes, captions, "note:" blocks or arrows drawn into the drawing. The screen shows only what the product would show. Everything you want to say about it goes in `annotate`.
+
+## 5b. Components
+
+A screen that writes `<sb-part name="sidebar"></sb-part>` stays linked to that component. Change the component once and every screen that uses it changes with it.
+
+- Before drawing, look at `components` in `open_project` and read the one you need with `read_part`. Write the tag where it goes; never paste the component's HTML into the screen.
+- What changes from screen to screen goes on the tag. `<sb-part name="sidebar" active="orders" show="goals"></sb-part>` reaches the component as `data-active="orders" data-show="goals"` on a wrapper, and the component styles every case: `[data-active="orders"] [data-nav="orders"]{…}` for the selected entry, `[data-nav="goals"]{display:none}` plus `[data-show~="goals"] [data-nav="goals"]{display:flex}` for an entry only some screens show. Never copy a component to move the selected item, rename a label or add an entry.
+- To change a component, `read_part` it, then `write_part` the same name with a `note` saying what changed. Every screen in a proposal shows the new version at once. Official screens keep the version they were approved with and get a "component changed" warning, because official means what is live. Tell the person how many screens follow and how many official ones wait; `write_part` returns both.
+- An entry that only one proposal adds stays hidden in the component, and that proposal's screens turn it on with `show`. Official screens then do not show something the product does not have yet.
+- When the change ships (PR merged and deployed), call `update_parts` on each official screen that waits, with the PR in `reason`. Do it in the sweep of step 2, next to the approvals.
+- Create a component on your own only for a product's frame (sidebar, top bar, styles) when it has none. For any other piece that repeats, draw it in the screen and suggest the component to the person.
+- Screens drawn before components were linked carry pasted copies of them. `link_part_copies` with `dry_run` says how many screens carry a copy; with the person's go-ahead, it turns them into links without changing how any screen looks.
 
 ## 5a. Annotating
 

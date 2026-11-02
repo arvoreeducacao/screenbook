@@ -113,9 +113,95 @@ test("a shared part is written once and lands inside every screen that names it"
   const book = await freshBook();
   await book.writePart("Sidebar", "<nav data-el='sidebar'>Orders</nav>");
   const saved = await book.writeScreen({ proposal: "p", name: "Deals", section: "Deals", html: "<sb-part name='sidebar'></sb-part><main>a</main>" });
-  assert.equal(await book.screenHtml("deals", saved.version), "<nav data-el='sidebar'>Orders</nav><main>a</main>");
+  assert.equal(await book.screenHtml("deals", saved.version), "<sb-part name='sidebar'></sb-part><main>a</main>");
+  assert.match(await book.composedHtml("deals", saved.version), /<!--sb-part sidebar v1--><nav data-el='sidebar'>Orders<\/nav><!--\/sb-part sidebar--><main>a<\/main>/);
   assert.deepEqual((await book.overview()).parts, ["sidebar"]);
+  assert.deepEqual((await book.screen("deals")).versions[0].parts, { sidebar: 1 });
   await assert.rejects(book.writeScreen({ proposal: "p", screen: "deals", html: "<sb-part name='topbar'/>" }), /no part called "topbar"/);
+});
+
+test("a part keeps its versions, and writing the same html adds none", async () => {
+  const book = await freshBook();
+  assert.equal((await book.writePart("Menu", "<nav>A</nav>")).version, 1);
+  assert.equal((await book.writePart("Menu", "<nav>A</nav>")).changed, false);
+  assert.equal((await book.writePart("Menu", "<nav>A B</nav>", { by: "Ana" })).version, 2);
+  const meta = await book.partMeta("menu");
+  assert.deepEqual(meta.versions.map((entry) => [entry.v, entry.by]), [[1, "agent"], [2, "Ana"]]);
+  assert.equal(await book.partHtml("menu", 1), "<nav>A</nav>");
+  await assert.rejects(book.writePart("Shell", "<sb-part name='menu'></sb-part>"), /cannot hold another/);
+});
+
+test("options on the tag reach the part as data attributes", async () => {
+  const book = await freshBook();
+  await book.writePart("Menu", "<nav><a data-nav='deals'>Deals</a></nav>");
+  await book.writeScreen({ proposal: "p", name: "Deals", section: "Deals", html: '<sb-part name="menu" active="deals" show="goals"></sb-part>' });
+  assert.match(await book.composedHtml("deals", 1), /<div data-sb-part="menu" data-active="deals" data-show="goals" style="display:contents"><nav>/);
+});
+
+test("a proposal follows the newest part, an official screen keeps its own until someone updates it", async () => {
+  const book = await freshBook();
+  await book.writePart("Menu", "<nav>v1</nav>");
+  await book.writeScreen({ proposal: "live", name: "Deals", section: "Deals", html: "<sb-part name='menu'></sb-part><main>deals</main>" });
+  await book.approve("live", "Ana");
+  await book.writeScreen({ proposal: "draft", name: "Goals", section: "Deals", html: "<sb-part name='menu'></sb-part><main>goals</main>" });
+  await book.writePart("Menu", "<nav>v2</nav>");
+  assert.match(await book.composedHtml("goals", 1), /<nav>v2<\/nav>/);
+  assert.match(await book.composedHtml("deals", 1), /<nav>v1<\/nav>/);
+  const overview = await book.overview();
+  assert.deepEqual(overview.outdated, { deals: [{ part: "menu", shown: 1, latest: 2 }] });
+  assert.deepEqual(overview.components, [{ id: "menu", latest: 2, screens: 2, following: 1, official: 1, outdated: 1 }]);
+  const kept = await book.keepParts({ screen: "deals", by: "Ana" });
+  assert.deepEqual(kept.kept, { menu: 2 });
+  assert.deepEqual((await book.overview()).outdated, {});
+  await book.writePart("Menu", "<nav>v3</nav>");
+  assert.deepEqual(Object.keys((await book.overview()).outdated), ["deals"]);
+  const updated = await book.updateParts({ screen: "deals", by: "Ana" });
+  assert.deepEqual(updated.changed, [{ part: "menu", from: 1, to: 3 }]);
+  assert.match(await book.composedHtml("deals", 1), /<nav>v3<\/nav>/);
+  assert.equal((await book.screen("deals")).versions[0].repinned[0].by, "Ana");
+  await assert.rejects(book.updateParts({ screen: "goals" }), /no official version/);
+  await book.approve("draft", "Ana");
+  assert.deepEqual((await book.screen("goals")).versions[0].parts, { menu: 3 });
+  await book.writePart("Menu", "<nav>v4</nav>");
+  assert.match(await book.composedHtml("goals", 1), /<nav>v3<\/nav>/);
+});
+
+test("a screenshot goes stale when the part a proposal follows changes", async () => {
+  const book = await freshBook();
+  await book.writePart("Menu", "<nav>v1</nav>");
+  await book.writeScreen({ proposal: "p", name: "Deals", section: "Deals", html: "<sb-part name='menu'></sb-part>" });
+  await book.savePng("deals", 1, Buffer.from("png"));
+  assert.equal(await book.shotIsStale("deals", 1), false);
+  await book.writePart("Menu", "<nav>v2</nav>");
+  assert.equal(await book.shotIsStale("deals", 1), true);
+  await book.savePng("deals", 1, Buffer.from("png2"));
+  assert.equal(await book.shotIsStale("deals", 1), false);
+});
+
+test("copies pasted before parts were linked become links without changing the screen", async () => {
+  const book = await freshBook();
+  const menu = "<nav class='menu'><a>Deals</a><a>Goals</a><a>Settings</a></nav>";
+  await book.store.write("parts/menu.html", menu);
+  await book.writeScreen({ proposal: "old", name: "Deals", section: "Deals", html: `${menu}<main>deals</main>` });
+  await book.approve("old", "Ana");
+  await book.writeScreen({ proposal: "draft", name: "Goals", section: "Deals", html: `${menu}<main>goals</main>` });
+  const before = (await book.composedHtml("deals", 1)).replace(/<!--\/?sb-part[^>]*-->/g, "");
+  const dry = await book.linkCopies({ part: "menu", dryRun: true });
+  assert.equal(dry.screens, 2);
+  assert.equal(await book.screenHtml("deals", 1), `${menu}<main>deals</main>`);
+  const done = await book.linkCopies({ part: "menu", by: "Ana" });
+  assert.deepEqual(done.linked.map((item) => [item.screen, item.official]), [["deals", true], ["goals", false]]);
+  assert.equal(await book.screenHtml("deals", 1), '<sb-part name="menu"></sb-part><main>deals</main>');
+  assert.equal((await book.composedHtml("deals", 1)).replace(/<!--\/?sb-part[^>]*-->/g, ""), before);
+  assert.deepEqual((await book.screen("deals")).versions[0].parts, { menu: 1 });
+  const component = await book.component("menu");
+  assert.equal(component.legacy, true);
+  assert.equal(component.screens, 2);
+  await book.writePart("Menu", "<nav class='menu'><a>Deals</a><a>Goals</a><a>Metas</a></nav>");
+  assert.match(await book.composedHtml("goals", 1), /Metas/);
+  assert.doesNotMatch(await book.composedHtml("deals", 1), /Metas/);
+  assert.equal((await book.partMeta("menu")).legacy, undefined);
+  assert.equal(await book.partHtml("menu", 1), menu);
 });
 
 test("edits change a few lines of the latest version", async () => {

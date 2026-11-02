@@ -11,6 +11,7 @@ import { annotationPreview, isAnnotation, splitAnnotations } from "./annotations
 import { arrange } from "./arrange.js";
 import { createTabs } from "./tabs.js";
 import { createLayers } from "./layers.js";
+import { createComponents, partsStamp } from "./components.js";
 import { createZoom } from "./zoom.js";
 import { createPalette } from "./palette.js";
 import { createStickies } from "./stickies.js";
@@ -316,7 +317,8 @@ function reusableShot(key) {
 }
 
 function attachShot(item, entry, box) {
-  const key = `${item.screen.id}/v${item.version}`;
+  const stamp = partsStamp(state, item.screen, item.version);
+  const key = `${item.screen.id}/v${item.version}${stamp ? `@${stamp}` : ""}`;
   const ready = reusableShot(key);
   if (ready) {
     box.prepend(ready);
@@ -358,7 +360,7 @@ function attachShot(item, entry, box) {
     frame.addEventListener("load", () => reveal(frame), { once: true });
     image.replaceWith(frame);
   }, { once: true });
-  image.src = `${BASE}/api/screens/${item.screen.id}/v${item.version}.png`;
+  image.src = `${BASE}/api/screens/${item.screen.id}/v${item.version}.png${stamp ? `?p=${stamp}` : ""}`;
   box.prepend(image);
 }
 
@@ -379,7 +381,9 @@ function frameElement(item, x, y) {
     ? t("Screen {number} · official · v{version}", { number: item.screen.number, version: item.version })
     : t("Screen {number} · {title}{closed} · v{version}", { number: item.screen.number, title: item.proposal.title, closed: frozen(item) ? ` · ${closedLabel(item.proposal).toLowerCase()}` : "", version: item.version });
   const base = compareBase(item.screen, item.version);
-  const caption = `<span class="num ${item.kind === "official" ? "live" : "prop"}">${item.screen.number}</span><span class="cap-text" title="${escapeHtml(hint)}">${escapeHtml(label)}</span>`;
+  const waiting = item.kind === "official" && item.version === item.screen.official ? state.data.outdated?.[item.screen.id] : null;
+  const flag = waiting?.length ? `<span class="cp-flag" title="${escapeHtml(t("A component of this screen has a newer version: {names}", { names: waiting.map((row) => `${row.part} v${row.latest}`).join(", ") }))}">◆ ${escapeHtml(t("component changed"))}</span>` : "";
+  const caption = `<span class="num ${item.kind === "official" ? "live" : "prop"}">${item.screen.number}</span><span class="cap-text" title="${escapeHtml(hint)}">${escapeHtml(label)}</span>${flag}`;
   element.innerHTML = `<div class="cap">${caption}</div><div class="shot"><div class="box" style="width:${FRAME_WIDTH}px;height:${height}px"></div><div class="pins"></div><div class="annos"></div>${
     base ? `<button type="button" class="prev-btn">${escapeHtml(compareLabel(base))}</button>` : ""
   }</div>`;
@@ -1688,8 +1692,13 @@ function select(item, silent = false) {
       <button data-open="talk"><span>${t("Conversation")}</span><b>${state.data.comments[item.screen.id] ?? 0}</b></button>
       <button data-open="inspect"><span>${t("Inspect")}</span></button>
       <button data-open="history"><span>${t("History")}</span><b>${item.screen.versions?.length ?? ""}</b></button>
-    </nav>`;
+    </nav>${componentsOfScreen(item)}`;
   inspector.querySelectorAll("[data-open]").forEach((button) => button.addEventListener("click", () => openOverlayOn(item, button.dataset.open)));
+  inspector.querySelectorAll("[data-open-component]").forEach((button) => button.addEventListener("click", () => {
+    setSide("components");
+    components.open(button.dataset.openComponent);
+  }));
+  inspector.querySelectorAll("[data-parts]").forEach((button) => button.addEventListener("click", () => components.updateScreen(item.screen.id, button.dataset.parts)));
   inspector.hidden = false;
   renderFrameBar();
   $("#askbar").hidden = Boolean(shared);
@@ -1697,6 +1706,38 @@ function select(item, silent = false) {
   placeInspector();
   if (!silent) $("#ask-input").blur();
   layers.render();
+}
+
+function componentsOfScreen(item) {
+  const entry = versionEntry(item.screen, item.version);
+  if (!entry?.parts) return "";
+  const latest = Object.fromEntries((state.data.components ?? []).map((row) => [row.id, row.latest]));
+  const follows = item.version === item.screen.versions.at(-1)?.v && item.screen.official !== item.version;
+  const waiting = item.screen.official === item.version ? state.data.outdated?.[item.screen.id] ?? [] : [];
+  const rows = Object.entries(entry.parts).map(([name, pinned]) => {
+    const shown = follows ? latest[name] ?? pinned : pinned;
+    const behind = waiting.find((row) => row.part === name);
+    const note = behind
+      ? `<p>${escapeHtml(t("This screen is official with v{shown}. v{latest} is the newest. Update once the product has it.", { shown: behind.shown, latest: behind.latest }))}</p>${shared ? "" : `<div class="cp-part-actions"><button class="btn sm approve" data-parts="update">${t("Update to v{v}", { v: behind.latest })}</button><button class="btn sm" data-parts="keep">${t("Keep v{v}", { v: behind.shown })}</button></div>`}`
+      : "";
+    const status = behind ? `<span class="cp-tag warn">v${behind.shown} → v${behind.latest}</span>` : `<span class="cp-tag ${follows ? "prop" : "live"}">v${shown}${follows ? ` · ${t("follows")}` : ""}</span>`;
+    return `<div class="cp-part${behind ? " outdated" : ""}"><div class="cp-part-head"><i class="cp-dia"></i><button data-open-component="${escapeHtml(name)}">${escapeHtml(name)}</button>${status}</div>${note}</div>`;
+  });
+  return `<div class="cp-in"><h4>${t("Components on this screen")}</h4>${rows.join("")}</div>`;
+}
+
+function setSide(side) {
+  state.side = side;
+  const showing = side === "components";
+  $("#side-tabs").querySelectorAll("[data-side]").forEach((button) => {
+    const on = button.dataset.side === side;
+    button.classList.toggle("on", on);
+    button.setAttribute("aria-selected", String(on));
+  });
+  $("#sidebar").classList.toggle("side-components", showing);
+  $("#components-group").hidden = !showing;
+  if (showing) components.render();
+  else components.close();
 }
 
 function renderFrameBar() {
@@ -2489,9 +2530,13 @@ async function refresh(force = false) {
   const data = await api(`${BASE}/api/overview?handle=${encodeURIComponent(HANDLE)}`);
   const signature = JSON.stringify(data);
   if (!force && signature === state.signature) return;
+  const kit = JSON.stringify([data.components, data.outdated, data.parts]);
+  const kitChanged = state.kit !== undefined && state.kit !== kit;
+  state.kit = kit;
   state.signature = signature;
   state.data = data;
   render();
+  if (kitChanged && state.side === "components") components.invalidate();
   if (state.note?.root && !$("#note-text")?.value) renderNote();
   if (state.overlay) {
     await loadOverlayComments();
@@ -2519,6 +2564,34 @@ const tabs = createTabs({
     if (refit) fit();
   },
 });
+const components = createComponents({
+  base: BASE,
+  state,
+  list: $("#components-group"),
+  api,
+  post,
+  ensureName,
+  toast,
+  refresh,
+  openScreen: (screenId, version) => {
+    components.close();
+    openOverlay(screenId, version);
+  },
+  askAi: (text) => {
+    if (!aiPanel) {
+      toast(t("Ask the chat you work with: {text}", { text }));
+      return;
+    }
+    aiPanel.toggle(true);
+    aiPanel.ask(text);
+  },
+});
+
+$("#side-tabs").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-side]");
+  if (button) setSide(button.dataset.side);
+});
+
 const layers = createLayers({
   state,
   list: $("#section-list"),
@@ -2862,6 +2935,11 @@ renderMe();
 tabs.start();
 await refresh(true);
 const focusProposal = shared?.proposal ?? new URLSearchParams(location.search).get("proposal");
+const focusComponent = shared ? null : new URLSearchParams(location.search).get("component");
+if (focusComponent) {
+  setSide("components");
+  components.open(focusComponent).catch(() => toast(t("No component called {name}.", { name: focusComponent })));
+}
 const nothingOfficial = !state.data.screens.some((screen) => screen.official);
 if (!focusProposal && nothingOfficial && openProposals().length) focusOn("all");
 if (focusProposal) {

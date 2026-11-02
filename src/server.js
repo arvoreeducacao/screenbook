@@ -205,7 +205,7 @@ async function readBody(request, limit = 1_000_000) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
 }
 
-const STATIC_FILES = new Set(["style.css", "app.js", "i18n.js", "i18n-pt.js", "live.js", "proposal.js", "annotations.js", "arrange.js", "pages.js", "tabs.js", "layers.js", "menu.js", "zoom.js", "palette.js", "stickies.js", "ai.js", "logo.svg", "board.js", "board-model.js", "board.css"]);
+const STATIC_FILES = new Set(["style.css", "app.js", "i18n.js", "i18n-pt.js", "live.js", "proposal.js", "annotations.js", "arrange.js", "pages.js", "tabs.js", "layers.js", "components.js", "menu.js", "zoom.js", "palette.js", "stickies.js", "ai.js", "logo.svg", "board.js", "board-model.js", "board.css"]);
 for (const file of ["ui.css", "shell.js", "devmode.css", "home.css", "home.js", "inspect.js", "history.js", "present.js", "export.js", "edit.js", "edit-ops.js", "edit.css"]) STATIC_FILES.add(file);
 
 function escapeHtml(text) {
@@ -294,9 +294,31 @@ async function sendScreenExport(response, book, id, version) {
   });
 }
 
+let shooting = Promise.resolve();
+
+function reshoot(book, id, version) {
+  const run = shooting.then(async () => {
+    if (!(await book.shotIsStale(id, version))) return null;
+    const { screenshot } = await import("./render.js");
+    const entry = (await book.screen(id)).versions.find((item) => item.v === version);
+    const png = await screenshot(await book.composedHtml(id, version), { width: entry.width, height: entry.height });
+    await book.savePng(id, version, png);
+    return png;
+  });
+  shooting = run.catch(() => null);
+  return run;
+}
+
 async function sendScreenPng(response, book, id, version) {
-  const png = await book.png(id, version);
+  let png = await book.png(id, version);
+  if (await book.shotIsStale(id, version).catch(() => false)) png = (await reshoot(book, id, version).catch(() => null)) ?? png;
   return png ? send(response, 200, png, "image/png") : send(response, 404, { error: "no screenshot yet" });
+}
+
+async function sendPartHtml(response, book, id, version) {
+  return send(response, 200, await book.partHtmlPage(id, version), "text/html; charset=utf-8", {
+    "Content-Security-Policy": "sandbox allow-scripts",
+  });
 }
 
 async function rpcCall(request, response, methods, user = null) {
@@ -348,6 +370,26 @@ async function apiRoute({ book, key, live, ai, auth, request, response, path, ur
   }
   if (request.method === "GET" && path === "/api/overview") {
     return send(response, 200, await book.overview(url.searchParams.get("handle")));
+  }
+  if (request.method === "GET" && path === "/api/components") {
+    return send(response, 200, await book.components());
+  }
+  if (request.method === "GET" && (match = path.match(/^\/api\/components\/([\w-]+)$/))) {
+    const version = Number(url.searchParams.get("version")) || null;
+    return send(response, 200, await book.component(match[1], version));
+  }
+  if (request.method === "GET" && (match = path.match(/^\/api\/components\/([\w-]+)\/v(\d+)\.html$/))) {
+    return sendPartHtml(response, book, match[1], Number(match[2]));
+  }
+  if (request.method === "POST" && (match = path.match(/^\/api\/components\/([\w-]+)\/link$/))) {
+    const body = await readBody(request);
+    return send(response, 200, await book.linkCopies({ part: match[1], dryRun: Boolean(body.dryRun), by: user?.name ?? body.by ?? "someone" }));
+  }
+  if (request.method === "POST" && (match = path.match(/^\/api\/screens\/([\w-]+)\/parts\/(update|keep)$/))) {
+    const body = await readBody(request);
+    const by = user?.name ?? body.by;
+    if (!by) return send(response, 400, { error: "say who is doing it" });
+    return send(response, 200, match[2] === "update" ? await book.updateParts({ screen: match[1], by }) : await book.keepParts({ screen: match[1], by }));
   }
   if (request.method === "GET" && (match = path.match(/^\/api\/screens\/([\w-]+)\/v(\d+)\.html$/))) {
     return sendScreenHtml(response, book, match[1], Number(match[2]));
