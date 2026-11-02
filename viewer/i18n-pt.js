@@ -397,6 +397,7 @@ export default {
   "No screen by that name.": "Nenhuma tela com esse nome.",
   "No screen with that name.": "Nenhuma tela com esse nome.",
   "No screens on this page.": "Nenhuma tela nesta página.",
+  "Not linked to any screen": "Sem ligação com outra tela",
   "No section": "Sem seção",
   "No text.": "Nenhum texto.",
   "No token with that name.": "Nenhum token com esse nome.",
