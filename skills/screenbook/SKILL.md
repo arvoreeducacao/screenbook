@@ -75,7 +75,7 @@ Every screen has a number, shown on the canvas next to its name (the `#number` i
 - Put `data-el="stable-name"` on every piece people may comment on: buttons, fields, cards, rows, notices. The name describes the piece (`place-order`), never its look, and never changes between versions; comments are pinned to it.
 - Desktop is 1280×800 by default. For phone screens pass `width: 375, height: 812`, and use `screenshot` with `mobile: true` to check a desktop screen at phone width.
 - Realistic made-up data in the product's language. Never real names of people or customers, tokens or production data.
-- When a piece leads to another screen, record it with `link_screens` so the flow map shows the path.
+- When a piece leads to another screen, link it (section 5b).
 - Never write explanations inside the screen HTML: no dashed boxes, captions, "note:" blocks or arrows drawn into the drawing. The screen shows only what the product would show. Everything you want to say about it goes in `annotate`.
 
 ## 5a. Annotating
@@ -88,6 +88,16 @@ Every screen has a number, shown on the canvas next to its name (the `#number` i
 - `version` defaults to the latest; pass it when the note is about an older one.
 - Annotations never mention anyone and never wait for an answer; to ask a person something, ask in the chat. `read_screen` lists them under `annotations`, apart from people's `comments`.
 - When a note stops being true (the screen changed, the question was decided), `remove_annotation` it by id, or add a new one saying what changed.
+
+## 5b. Linking
+
+The Flow view draws the product as journeys: each link is an arrow from the piece people click to the screen it opens, and the presentation turns the same links into clickable spots. A screen without links waits apart, under "Not linked to any screen".
+
+- Link while you draw: once the screens of a proposal exist, call `link_screens` for every piece that opens another screen, with the piece's `data-el` as `el` and the action as `label` ("Open the order").
+- Tie the proposal to the product: link from the official screen where the journey starts today (the menu item, the list row, the button) to the first screen of the proposal, and from its last screen to where the person lands. Without these links the proposal is an island in the Flow.
+- Link forward navigation only. Back, close and cancel make loops that hide the path; the presentation has its own back button.
+- A variation needs a link only when an action leads to that state ("Save" to "Order · saved"). Otherwise it stays under its screen.
+- `read_screen` lists the screen's `links` (`leadsTo`, `comesFrom`). Read them before linking, and delete a wrong or stale link with `link_screens` and `remove: true`.
 
 ## 6. Approving and archiving
 
