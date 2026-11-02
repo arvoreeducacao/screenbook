@@ -136,14 +136,14 @@ export function buildTools(
         const meta = await book.screen(screen);
         const chosen = pickVersion(meta, version);
         announce({ action: "reading", screen, version: chosen });
-        const [html, notes, png, flows] = await Promise.all([
+        const [html, notes, png] = await Promise.all([
           book.screenHtml(screen, chosen),
           book.comments(screen),
           book.png(screen, chosen),
-          book.flows(),
         ]);
         const { comments, annotations } = splitAnnotations(notes);
         const conversations = comments.map((entry) => (entry.replyTo ? entry : { ...entry, resolved: entry.resolved ?? null }));
+        const flows = await book.flows();
         const links = {
           leadsTo: flows.filter((flow) => flow.from === meta.id).map(({ el, to, label }) => ({ el, to, label })),
           comesFrom: flows.filter((flow) => flow.to === meta.id).map(({ from, el, label }) => ({ from, el, label })),
