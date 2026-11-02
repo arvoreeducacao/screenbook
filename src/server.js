@@ -207,6 +207,7 @@ async function readBody(request, limit = 1_000_000) {
 
 const STATIC_FILES = new Set(["style.css", "app.js", "i18n.js", "i18n-pt.js", "live.js", "proposal.js", "annotations.js", "arrange.js", "pages.js", "tabs.js", "layers.js", "components.js", "menu.js", "zoom.js", "palette.js", "stickies.js", "ai.js", "logo.svg", "board.js", "board-model.js", "board.css"]);
 for (const file of ["ui.css", "shell.js", "devmode.css", "home.css", "home.js", "inspect.js", "history.js", "present.js", "export.js", "edit.js", "edit-ops.js", "edit.css"]) STATIC_FILES.add(file);
+STATIC_FILES.add("flow.js");
 
 function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);

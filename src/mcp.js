@@ -144,7 +144,12 @@ export function buildTools(
         const png = stale ? await shoot(screen, chosen, false).catch(() => book.png(screen, chosen)) : await book.png(screen, chosen);
         const { comments, annotations } = splitAnnotations(notes);
         const conversations = comments.map((entry) => (entry.replyTo ? entry : { ...entry, resolved: entry.resolved ?? null }));
-        const content = [text({ meta, version: chosen, comments: conversations, annotations }), text(html)];
+        const flows = await book.flows();
+        const links = {
+          leadsTo: flows.filter((flow) => flow.from === meta.id).map(({ el, to, label }) => ({ el, to, label })),
+          comesFrom: flows.filter((flow) => flow.to === meta.id).map(({ from, el, label }) => ({ from, el, label })),
+        };
+        const content = [text({ meta, version: chosen, links, comments: conversations, annotations }), text(html)];
         if (png) content.push(image(png));
         return { content };
       },
@@ -421,12 +426,14 @@ export function buildTools(
     },
 
     link_screens: {
-      description: "Record that a piece of one screen (its data-el) leads to another screen. This is what draws the flow map.",
+      description:
+        "Record that a piece of one screen (its data-el) leads to another screen. This draws the Flow map and the clickable spots of the presentation. Link forward navigation only, never back, close or cancel. read_screen lists the links a screen already has; pass remove to delete a wrong one (every link from one screen to the other when el is left out).",
       input: {
         from: z.string(),
         el: z.string().optional().describe("data-el of the piece that leads away"),
         to: z.string(),
-        label: z.string().optional(),
+        label: z.string().optional().describe("the action, in the product's language, e.g. Open the order"),
+        remove: z.boolean().optional().describe("true deletes the link instead of recording it"),
       },
       async run(input) {
         announce({ action: "linking", screen: input.from });

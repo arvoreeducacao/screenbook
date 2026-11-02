@@ -9,6 +9,7 @@ import { isBoard } from "./pages.js";
 import { closedLabel, closedVersion, isClosed, pinnedVersions } from "./proposal.js";
 import { annotationPreview, isAnnotation, splitAnnotations } from "./annotations.js";
 import { arrange } from "./arrange.js";
+import { FLOW, layoutFlow } from "./flow.js";
 import { createTabs } from "./tabs.js";
 import { createLayers } from "./layers.js";
 import { createComponents, partsStamp } from "./components.js";
@@ -486,70 +487,102 @@ function renderCanvas() {
   }
 }
 
+function flowItem(screen) {
+  const focused = focusedProposals().map((proposal) => proposal.screens[screen.id]).find(Boolean);
+  const version = focused ?? (state.focus === "all" ? screen.versions.at(-1).v : screen.official ?? screen.versions.at(-1).v);
+  if (version === screen.official) return { screen, version, kind: "official" };
+  return { screen, version, kind: "proposal", proposal: proposalOfVersion(screen.id, version) ?? { title: t("draft"), status: "open" } };
+}
+
+function flowTitle(ids, items) {
+  const owners = new Map();
+  for (const id of ids) {
+    const proposal = proposalOfVersion(id, items.get(id).version) ?? items.get(id).proposal;
+    if (proposal?.id) owners.set(proposal.id, proposal);
+  }
+  if (owners.size === 1) return [...owners.values()][0].title;
+  const sections = new Map(state.data.project.sections.map((section) => [section.id, section.name]));
+  return sections.get(items.get(ids[0]).screen.section) ?? t("No section");
+}
+
+function shortLabel(text, limit = 30) {
+  return text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}…` : text;
+}
+
+function focusFlow(id) {
+  edges.classList.toggle("focusing", Boolean(id));
+  for (const node of edges.querySelectorAll("[data-from]")) node.classList.toggle("on", Boolean(id) && (node.dataset.from === id || node.dataset.to === id));
+}
+
 function renderFlow() {
   world.querySelectorAll(".frame, .section").forEach((node) => node.remove());
   edges.innerHTML = "";
+  edges.classList.remove("focusing");
   state.placed = [];
-  const screens = state.data.screens.filter((screen) => screen.versions.length && tabs.visible(screen.section) && showsDevice({ screen, version: screen.official ?? screen.versions.at(-1).v }));
-  const flows = state.data.flows.filter((flow) => screenById(flow.from) && screenById(flow.to));
-  const depth = new Map();
-  const incoming = new Set(flows.map((flow) => flow.to));
-  const queue = screens.filter((screen) => !incoming.has(screen.id)).map((screen) => screen.id);
-  if (!queue.length && screens.length) queue.push(screens[0].id);
-  queue.forEach((id) => depth.set(id, 0));
-  while (queue.length) {
-    const id = queue.shift();
-    for (const flow of flows.filter((item) => item.from === id)) {
-      if (!depth.has(flow.to)) {
-        depth.set(flow.to, depth.get(id) + 1);
-        queue.push(flow.to);
-      }
-    }
+  state.sections = [];
+  const items = new Map();
+  for (const screen of state.data.screens) {
+    if (!screen.versions.length || !tabs.visible(screen.section)) continue;
+    const item = flowItem(screen);
+    if (showsDevice(item)) items.set(screen.id, item);
   }
-  for (const screen of screens) if (!depth.has(screen.id)) depth.set(screen.id, 0);
+  const order = arrange(state.data.project.sections, [...items.values()].map((item) => item.screen)).flatMap(({ groups }) => groups.flatMap((group) => [group.screen, ...group.variants]));
   const spread = state.showAnnotations && annotationThreads().length ? ANNO_SPACE : 0;
-  const columns = new Map();
-  const positions = new Map();
-  for (const screen of screens) {
-    const column = depth.get(screen.id);
-    const row = columns.get(column) ?? 0;
-    columns.set(column, row + 1);
-    const focused = focusedProposals().map((proposal) => proposal.screens[screen.id]).find(Boolean);
-    const version = focused ?? (state.focus === "all" ? screen.versions.at(-1).v : screen.official ?? screen.versions.at(-1).v);
-    const item = { screen, version, kind: screen.official === version ? "official" : "proposal", proposal: proposalOfVersion(screen.id, version) ?? { title: t("draft") } };
-    const x = column * (FRAME_WIDTH + 160 + spread);
-    const y = row * 300;
-    const { element, height } = frameElement(item, x, y);
-    const extra = annotatedItems([item]).has(item) ? ANNO_SPACE : 0;
-    if (extra) element.dataset.annos = "";
+  const { groups, positions, edges: links } = layoutFlow({
+    nodes: order.map((screen) => ({ id: screen.id, variantOf: screen.variantOf, height: frameHeight(items.get(screen.id)) })),
+    flows: state.data.flows,
+    size: { frameWidth: FRAME_WIDTH, columnGap: FLOW.columnGap + spread, looseGap: FRAME_GAP + spread },
+  });
+  for (const group of groups) {
+    const frame = document.createElement("div");
+    frame.className = `section flow-group${group.loose ? " loose" : ""}`;
+    frame.style.left = `${group.box.left}px`;
+    frame.style.top = `${group.box.top}px`;
+    frame.style.width = `${group.box.width}px`;
+    frame.style.height = `${group.box.height}px`;
+    frame.style.setProperty("--w", `${group.box.width}px`);
+    const title = group.loose ? t("Not linked to any screen") : flowTitle(group.ids, items);
+    frame.innerHTML = `<div class="flow-head"><span class="section-name">${escapeHtml(shortLabel(title, 72))}</span><span class="section-meta">${escapeHtml(t(group.screens === 1 ? "{n} screen" : "{n} screens", { n: group.screens }))}</span></div>`;
+    frame.querySelector(".flow-head").title = title;
+    world.appendChild(frame);
+  }
+  world.appendChild(edges);
+  const annotated = annotatedItems([...items.values()]);
+  for (const [id, spot] of positions) {
+    const item = items.get(id);
+    const { element, height } = frameElement(item, spot.x, spot.y);
+    if (annotated.has(item)) element.dataset.annos = "";
+    element.addEventListener("mouseenter", () => focusFlow(id));
+    element.addEventListener("mouseleave", () => focusFlow(state.selected?.screen.id));
+    element.addEventListener("click", () => focusFlow(id));
     world.appendChild(element);
-    positions.set(screen.id, { x, y: y + 26, height });
-    state.placed.push({ item, element, x, y: y + 26, width: FRAME_WIDTH, height, reach: FRAME_WIDTH + extra });
+    state.placed.push({ item, element, x: spot.x, y: spot.y + 26, width: FRAME_WIDTH, height, reach: FRAME_WIDTH + (annotated.has(item) ? ANNO_SPACE : 0) });
   }
   const ns = "http://www.w3.org/2000/svg";
-  for (const flow of flows) {
-    const from = positions.get(flow.from);
-    const to = positions.get(flow.to);
-    const x1 = from.x + FRAME_WIDTH;
-    const y1 = from.y + from.height / 2;
-    const x2 = to.x;
-    const y2 = to.y + to.height / 2;
-    const bend = Math.max(40, Math.abs(x2 - x1) / 2);
+  edges.innerHTML = `<defs><marker id="flow-arrow" class="flow-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker><marker id="flow-arrow-on" class="flow-arrow on" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>`;
+  for (const link of links) {
     const path = document.createElementNS(ns, "path");
-    path.setAttribute("class", "link-path");
-    path.setAttribute("d", `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`);
+    path.setAttribute("class", `link-path${link.back ? " back" : ""}`);
+    path.setAttribute("d", link.path);
+    path.dataset.from = link.from;
+    path.dataset.to = link.to;
     edges.appendChild(path);
-    const label = flow.label ?? flow.el;
-    if (label) {
-      const text = document.createElementNS(ns, "text");
-      text.setAttribute("class", "flow-label");
-      text.setAttribute("x", (x1 + x2) / 2);
-      text.setAttribute("y", (y1 + y2) / 2 - 8);
-      text.setAttribute("text-anchor", "middle");
-      text.textContent = label;
-      edges.appendChild(text);
-    }
+    const label = link.label ?? link.el;
+    if (!label) continue;
+    const text = document.createElementNS(ns, "text");
+    text.setAttribute("class", `flow-label${link.back ? " back" : ""}`);
+    text.setAttribute("x", link.labelAt.x);
+    text.setAttribute("y", link.labelAt.y);
+    text.setAttribute("text-anchor", link.labelAt.anchor);
+    text.dataset.from = link.from;
+    text.dataset.to = link.to;
+    text.textContent = shortLabel(label);
+    const hint = document.createElementNS(ns, "title");
+    hint.textContent = `${label} → ${items.get(link.to).screen.name}`;
+    text.appendChild(hint);
+    edges.appendChild(text);
   }
+  if (state.selected) focusFlow(state.selected.screen.id);
 }
 
 function render() {

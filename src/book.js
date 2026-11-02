@@ -1046,12 +1046,18 @@ export class Book {
     return this.readJson("flows.json", []);
   }
 
-  async link({ from, el, to, label }) {
-    return this.saving(`linked ${from} to ${to}`, async () => {
+  async link({ from, el, to, label, remove = false }) {
+    return this.saving(`${remove ? "unlinked" : "linked"} ${from} to ${to}`, async () => {
       const flows = await this.flows();
+      if (remove) {
+        const kept = flows.filter((flow) => !(flow.from === from && flow.to === to && (el === undefined || flow.el === (el ?? null))));
+        if (kept.length === flows.length) throw new Error(`no link from ${from} to ${to}${el ? ` by ${el}` : ""}`);
+        await this.writeJson("flows.json", kept);
+        return { from, to, removed: flows.length - kept.length };
+      }
       await this.screen(from);
       await this.screen(to);
-      const rest = flows.filter((flow) => !(flow.from === from && flow.el === el && flow.to === to));
+      const rest = flows.filter((flow) => !(flow.from === from && flow.el === (el ?? null) && flow.to === to));
       const entry = { from, el: el ?? null, to, label: label ?? null };
       rest.push(entry);
       await this.writeJson("flows.json", rest);
