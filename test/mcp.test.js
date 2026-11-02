@@ -24,7 +24,7 @@ async function setup() {
   return { book, tools, renders };
 }
 
-test("there are exactly twenty-three tools, and ask_person only inside the screenbook's own AI", async () => {
+test("there are exactly twenty-six tools, and ask_person only inside the screenbook's own AI", async () => {
   const { tools } = await setup();
   assert.deepEqual(Object.keys(tools).sort(), [
     "annotate",
@@ -34,10 +34,12 @@ test("there are exactly twenty-three tools, and ask_person only inside the scree
     "create_board",
     "find_screens",
     "inspect_screen",
+    "link_part_copies",
     "link_screens",
     "open_project",
     "read_board",
     "read_guide",
+    "read_part",
     "read_proposal",
     "read_screen",
     "remove_annotation",
@@ -46,6 +48,7 @@ test("there are exactly twenty-three tools, and ask_person only inside the scree
     "restore",
     "screenshot",
     "share",
+    "update_parts",
     "write_board",
     "write_guide",
     "write_part",
@@ -277,4 +280,22 @@ test("resolve_comment closes a conversation, and what the tools return about it 
   const note = JSON.parse((await tools.annotate.run({ screen: "list", text: "why" })).content[0].text);
   const refused = await tools.resolve_comment.run({ comment: note.id }).catch((error) => error);
   assert.match(refused.message, /annotation/);
+});
+
+test("a component is versioned, read back with who uses it, and official screens wait for an update", async () => {
+  const { book, tools } = await setup();
+  await tools.write_part.run({ name: "Menu", html: "<nav><a data-nav='deals'>Deals</a></nav>" });
+  await tools.write_screen.run({ proposal: "live", name: "Deals", section: "Deals", html: "<sb-part name='menu' active='deals'></sb-part>" });
+  await book.approve("live", "Ana");
+  await tools.write_screen.run({ proposal: "draft", name: "Goals", section: "Deals", html: "<sb-part name='menu'></sb-part>" });
+  const saved = JSON.parse((await tools.write_part.run({ name: "Menu", html: "<nav><a data-nav='deals'>Deals</a><a data-nav='goals'>Goals</a></nav>", note: "goals" })).content[0].text);
+  assert.equal(saved.version, 2);
+  assert.equal(saved.following, 1);
+  assert.deepEqual(saved.officialWaiting.map((row) => row.screen), ["deals"]);
+  const read = JSON.parse((await tools.read_part.run({ name: "menu", version: 1 })).content[0].text);
+  assert.equal(read.version, 1);
+  assert.equal(read.latest, 2);
+  assert.equal(read.versions[1].note, "goals");
+  const updated = JSON.parse((await tools.update_parts.run({ screen: "deals" })).content[0].text);
+  assert.deepEqual(updated.changed, [{ part: "menu", from: 1, to: 2 }]);
 });

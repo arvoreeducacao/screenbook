@@ -81,7 +81,7 @@ export function buildTools(
   const tools = {
     open_project: {
       description:
-        "Open the screenbook: its sections, every screen with its official and latest version, open proposals, and the comments mentioning you that still wait for an answer. Start here. In a big product the sections list only screen ids: pass section to see one section in full.",
+        "Open the screenbook: its sections, every screen with its official and latest version, open proposals, its components (shared parts, with how many screens use each one) and the official screens waiting for a newer component (outdated), and the comments mentioning you that still wait for an answer. Start here. In a big product the sections list only screen ids: pass section to see one section in full.",
       input: {
         section: z.string().optional().describe("a section name or id: lists only that section, with every screen's name and versions"),
       },
@@ -136,11 +136,12 @@ export function buildTools(
         const meta = await book.screen(screen);
         const chosen = pickVersion(meta, version);
         announce({ action: "reading", screen, version: chosen });
-        const [html, notes, png] = await Promise.all([
+        const [html, notes, stale] = await Promise.all([
           book.screenHtml(screen, chosen),
           book.comments(screen),
-          book.png(screen, chosen),
+          book.shotIsStale(screen, chosen).catch(() => false),
         ]);
+        const png = stale ? await shoot(screen, chosen, false).catch(() => book.png(screen, chosen)) : await book.png(screen, chosen);
         const { comments, annotations } = splitAnnotations(notes);
         const conversations = comments.map((entry) => (entry.replyTo ? entry : { ...entry, resolved: entry.resolved ?? null }));
         const content = [text({ meta, version: chosen, comments: conversations, annotations }), text(html)];
@@ -222,7 +223,7 @@ export function buildTools(
 
     write_screen: {
       description:
-        "Draw a screen, or a new version of one, inside a proposal. Write plain HTML (a fragment or a full document); the project's shared head.html, if any, is added around it, and every <sb-part name=\"x\"></sb-part> is replaced by that shared part. Give every piece people may comment on a stable data-el name. To change a few lines, pass edits instead of html: they apply to the latest version. To fix your own draft before anyone commented on it, pass amend: true and the latest version is overwritten instead of a new one being added. Returns the screenshot so you can check what you drew.",
+        "Draw a screen, or a new version of one, inside a proposal. Write plain HTML (a fragment or a full document); the project's shared head.html, if any, is added around it. Every <sb-part name=\"x\"></sb-part> stays linked to that shared part: a screen in a proposal always shows the part's newest version, an official screen keeps the version it was approved with. Other attributes on the tag reach the part as data attributes on a wrapper (<sb-part name=\"menu\" active=\"orders\"> becomes data-active=\"orders\"), so one part serves every screen. Give every piece people may comment on a stable data-el name. To change a few lines, pass edits instead of html: they apply to the latest version. To fix your own draft before anyone commented on it, pass amend: true and the latest version is overwritten instead of a new one being added. Returns the screenshot so you can check what you drew.",
       input: {
         proposal: z.string().describe("the mission this drawing belongs to, e.g. checkout-redesign; created if new"),
         proposal_title: z.string().optional().describe("human title for a new proposal"),
@@ -368,13 +369,54 @@ export function buildTools(
 
     write_part: {
       description:
-        "Save a piece shared by several screens of this product, like the sidebar or the top bar. Screens use it with <sb-part name=\"sidebar\"></sb-part>, which is replaced by the part when the screen is written; versions already drawn keep what they had.",
+        "Save a new version of a component: a piece shared by many screens of this product, like the sidebar or the top bar. Screens use it with <sb-part name=\"sidebar\"></sb-part> and stay linked: every screen in a proposal shows the newest version at once, and official screens keep theirs and get a warning until someone updates them. Read the part first with read_part and change that one; never save a copy under a new name to change one detail. What changes from screen to screen goes on the tag as an attribute (active=\"orders\") and the part styles it with [data-active=\"orders\"] [data-nav=\"orders\"]. Returns how many screens follow it and how many official ones will wait for an update.",
       input: {
-        name: z.string().describe("e.g. sidebar"),
+        name: z.string().describe("the part's role, e.g. sidebar, topbar, styles; never a mission or a version"),
         html: z.string(),
+        note: z.string().optional().describe("what changed in this version, in the product's language, e.g. entrou o item Metas"),
       },
-      async run({ name, html }) {
-        return { content: [text(await book.writePart(name, html))] };
+      async run({ name, html, note }) {
+        const saved = await book.writePart(name, html, { by: handle, note: note ?? null });
+        const { usage, html: _html, versions, ...summary } = await book.component(saved.part);
+        return { content: [text({ ...saved, ...summary, officialWaiting: usage.filter((row) => row.outdated).map((row) => ({ screen: row.screen, number: row.number })) })] };
+      },
+    },
+
+    read_part: {
+      description:
+        "Read a component (shared part): its HTML at the newest version or at the one you ask for, its versions with who changed what, and every screen that uses it (proposal screens follow the newest version; official ones show the version they were approved with, and outdated: true when a newer one waits). Read it before changing it or before drawing a screen that needs it.",
+      input: {
+        name: z.string(),
+        version: z.number().int().positive().optional(),
+      },
+      async run({ name, version }) {
+        return { content: [text(fit(await book.component(name, version ?? null)))] };
+      },
+    },
+
+    link_part_copies: {
+      description:
+        "Turn the copies of a part that older screens carry pasted inside them into links to that part, without changing how any screen looks. Before parts were linked, writing a screen pasted the part's HTML into it; this finds those exact copies in the current versions (official and latest) and puts the <sb-part> tag back, pinned to the version that matched. Run it with dry_run first and tell the person how many screens it links.",
+      input: {
+        name: z.string(),
+        dry_run: z.boolean().optional(),
+      },
+      async run({ name, dry_run }) {
+        return { content: [text(fit(await book.linkCopies({ part: name, dryRun: Boolean(dry_run), by: handle })))] };
+      },
+    },
+
+    update_parts: {
+      description:
+        "Bring an official screen up to the newest version of the components it uses, after the change is live in the product (its PR merged and deployed) or when a person asks. Proposal screens never need it: they follow the newest version by themselves.",
+      input: {
+        screen: z.string(),
+        reason: z.string().optional().describe("what proves it is live, e.g. the PR"),
+      },
+      async run({ screen }) {
+        const result = await book.updateParts({ screen, by: handle });
+        const png = result.changed.length ? await shoot(screen, result.version, false) : null;
+        return { content: [text(result), ...(png ? [image(png)] : [])] };
       },
     },
 
