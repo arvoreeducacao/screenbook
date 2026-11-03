@@ -318,7 +318,7 @@ function reusableShot(key) {
   return shot.isConnected ? shot.cloneNode() : shot;
 }
 
-function attachShot(item, box) {
+function attachShot(item, entry, box) {
   const stamp = partsStamp(state, item.screen, item.version);
   const key = `${item.screen.id}/v${item.version}${stamp ? `@${stamp}` : ""}`;
   const ready = reusableShot(key);
@@ -358,8 +358,35 @@ function attachShot(item, box) {
       if (image.isConnected) image.src = `${source}${stamp ? "&" : "?"}retry=${tries}`;
     }, SHOT_RETRIES[tries++]);
   });
+  image.dataset.full = `${BASE}/api/screens/${item.screen.id}/v${item.version}.png${stamp ? `?p=${stamp}` : ""}`;
+  image.dataset.width = String(entry.width);
+  image.addEventListener("load", scheduleSharpen, { once: true });
   image.src = source;
   box.prepend(image);
+}
+
+let sharpenTimer = 0;
+
+function scheduleSharpen() {
+  clearTimeout(sharpenTimer);
+  sharpenTimer = setTimeout(sharpenVisible, 180);
+}
+
+function sharpenVisible() {
+  const wanted = FRAME_WIDTH * state.scale * (window.devicePixelRatio || 1);
+  const view = viewport.getBoundingClientRect();
+  world.querySelectorAll(".frame img.shot-img[data-full]:not([data-sharp])").forEach((image) => {
+    if (!image.naturalWidth || image.naturalWidth >= Number(image.dataset.width) || image.naturalWidth >= wanted * 0.95) return;
+    const box = image.getBoundingClientRect();
+    if (box.right < view.left || box.left > view.right || box.bottom < view.top || box.top > view.bottom) return;
+    image.dataset.sharp = "1";
+    const full = new Image();
+    full.addEventListener("load", () => {
+      if (image.isConnected) image.src = full.src;
+    }, { once: true });
+    full.addEventListener("error", () => delete image.dataset.sharp, { once: true });
+    full.src = image.dataset.full;
+  });
 }
 
 function frameHeight(item) {
@@ -392,7 +419,7 @@ function frameElement(item, x, y) {
     event.stopPropagation();
     openCompare(item);
   });
-  attachShot(item, box);
+  attachShot(item, entry, box);
   element.addEventListener("click", (event) => {
     event.stopPropagation();
     if (phone() && moved) return;
@@ -1638,6 +1665,7 @@ function applyTransform() {
   live?.reposition();
   zoom.update();
   board?.onTransform();
+  scheduleSharpen();
 }
 
 function fit() {
