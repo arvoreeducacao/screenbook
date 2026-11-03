@@ -40,6 +40,33 @@ export async function screenshot(html, { width, height, fullPage = false } = {})
   }
 }
 
+export async function thumbnail(png, { width: target = 640, quality = 0.82 } = {}) {
+  const page = await (await browser()).newPage({ viewport: { width: 64, height: 64 } });
+  try {
+    const encoded = await page.evaluate(
+      async ({ source, target, quality }) => {
+        const image = new Image();
+        image.src = source;
+        await image.decode();
+        const width = Math.min(target, image.naturalWidth);
+        const height = Math.max(1, Math.round((image.naturalHeight * width) / image.naturalWidth));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext("2d");
+        context.imageSmoothingQuality = "high";
+        context.drawImage(image, 0, 0, width, height);
+        return canvas.toDataURL("image/webp", quality);
+      },
+      { source: `data:image/png;base64,${Buffer.from(png).toString("base64")}`, target, quality },
+    );
+    if (!encoded.startsWith("data:image/webp;base64,")) throw new Error("this Chrome cannot encode WebP");
+    return Buffer.from(encoded.slice(encoded.indexOf(",") + 1), "base64");
+  } finally {
+    await page.close();
+  }
+}
+
 export async function closeRenderer() {
   if (!browserPromise) return;
   const current = await browserPromise.catch(() => null);

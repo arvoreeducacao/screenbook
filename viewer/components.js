@@ -110,7 +110,7 @@ export function createComponents({ base, state, list, api, post, ensureName, toa
     const actions = row.outdated
       ? `<span class="cp-actions"><button class="btn sm approve" data-update="${escapeHtml(row.screen)}">${t("Update to v{v}", { v: row.latest })}</button><button class="btn sm" data-keep="${escapeHtml(row.screen)}">${t("Keep v{v}", { v: row.shown })}</button></span>`
       : "";
-    return `<li class="cp-use${row.outdated ? " outdated" : ""}"><button class="cp-thumb" data-screen="${escapeHtml(row.screen)}" data-version="${row.version}"><img src="${base}/api/screens/${escapeHtml(row.screen)}/v${row.version}.png?p=${row.shown}" alt="" loading="lazy"></button><span class="cp-use-text"><b>${row.number ?? ""} ${escapeHtml(row.name)}</b>${status}</span>${actions}</li>`;
+    return `<li class="cp-use${row.outdated ? " outdated" : ""}"><button class="cp-thumb" data-screen="${escapeHtml(row.screen)}" data-version="${row.version}"><img src="${base}/api/screens/${escapeHtml(row.screen)}/v${row.version}.thumb.webp?p=${row.shown}" alt="" loading="lazy"></button><span class="cp-use-text"><b>${row.number ?? ""} ${escapeHtml(row.name)}</b>${status}</span>${actions}</li>`;
   }
 
   function renderView() {

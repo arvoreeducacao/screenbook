@@ -308,6 +308,7 @@ function itemsFor(screen) {
 }
 
 const loadedShots = new Map();
+const SHOT_RETRIES = [1000, 3000, 8000, 20000];
 const latestShotOfScreen = new Map();
 let screensPainted = null;
 
@@ -317,7 +318,7 @@ function reusableShot(key) {
   return shot.isConnected ? shot.cloneNode() : shot;
 }
 
-function attachShot(item, entry, box) {
+function attachShot(item, box) {
   const stamp = partsStamp(state, item.screen, item.version);
   const key = `${item.screen.id}/v${item.version}${stamp ? `@${stamp}` : ""}`;
   const ready = reusableShot(key);
@@ -349,19 +350,15 @@ function attachShot(item, entry, box) {
   image.loading = "lazy";
   image.className = "shot-img";
   image.addEventListener("load", () => reveal(image), { once: true });
+  const source = `${BASE}/api/screens/${item.screen.id}/v${item.version}.thumb.webp${stamp ? `?p=${stamp}` : ""}`;
+  let tries = 0;
   image.addEventListener("error", () => {
-    const frame = document.createElement("iframe");
-    frame.src = `${BASE}/api/screens/${item.screen.id}/v${item.version}.html`;
-    frame.loading = "lazy";
-    frame.tabIndex = -1;
-    frame.className = "shot-img";
-    frame.style.width = `${entry.width}px`;
-    frame.style.height = `${entry.height}px`;
-    frame.style.transform = `scale(${FRAME_WIDTH / entry.width})`;
-    frame.addEventListener("load", () => reveal(frame), { once: true });
-    image.replaceWith(frame);
-  }, { once: true });
-  image.src = `${BASE}/api/screens/${item.screen.id}/v${item.version}.png${stamp ? `?p=${stamp}` : ""}`;
+    if (tries >= SHOT_RETRIES.length || !image.isConnected) return;
+    setTimeout(() => {
+      if (image.isConnected) image.src = `${source}${stamp ? "&" : "?"}retry=${tries}`;
+    }, SHOT_RETRIES[tries++]);
+  });
+  image.src = source;
   box.prepend(image);
 }
 
@@ -395,7 +392,7 @@ function frameElement(item, x, y) {
     event.stopPropagation();
     openCompare(item);
   });
-  attachShot(item, entry, box);
+  attachShot(item, box);
   element.addEventListener("click", (event) => {
     event.stopPropagation();
     if (phone() && moved) return;
