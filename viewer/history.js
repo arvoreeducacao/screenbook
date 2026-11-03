@@ -142,7 +142,7 @@ export function createHistory({ base, escapeHtml, timeAgo, frameUrl, shared }) {
                 }</div>`;
           return `<div class="hv-row${viewing ? " on" : ""}${comparing ? " cmp" : ""}" data-v="${row.v}" role="button" tabindex="0">
             <span class="hv-rail"><i class="hv-dot${row.official ? " live" : ""}"></i></span>
-            <div class="hv-thumb"><img src="${base}/api/screens/${escapeHtml(screen.id)}/v${row.v}.png" alt="" loading="lazy" onerror="this.remove()"></div>
+            <div class="hv-thumb"><img src="${base}/api/screens/${escapeHtml(screen.id)}/v${row.v}.thumb.webp" alt="" loading="lazy" onerror="this.remove()"></div>
             <div class="hv-info">
               <div class="hv-line"><b>v${row.v}</b>${tags}</div>
               <div class="muted hv-meta">${escapeHtml(row.by)} · ${escapeHtml(timeAgo(row.at))}${row.restoredFrom ? ` · ${t("back from v{v}", { v: row.restoredFrom })}` : ""}</div>

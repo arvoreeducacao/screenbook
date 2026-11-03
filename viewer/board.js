@@ -383,7 +383,7 @@ export function createBoard({ state, viewport, world, base, api, post, ensureNam
     } else if (type === "screen") {
       const found = screenVersion(item.screen, item.version);
       node.innerHTML = found
-        ? `<div class="bd-screen-shot"><img src="${base}/api/screens/${encodeURIComponent(item.screen)}/v${found.version}.png" alt="" draggable="false" loading="lazy" onerror="this.remove()"></div><div class="bd-screen-name"><b>${found.screen.number}</b><span>${escapeHtml(found.screen.name)}</span></div>`
+        ? `<div class="bd-screen-shot"><img src="${base}/api/screens/${encodeURIComponent(item.screen)}/v${found.version}.thumb.webp" alt="" draggable="false" loading="lazy" onerror="this.remove()"></div><div class="bd-screen-name"><b>${found.screen.number}</b><span>${escapeHtml(found.screen.name)}</span></div>`
         : `<div class="bd-screen-shot"></div><div class="bd-screen-name"><span>${escapeHtml(t("Screen not found"))}</span></div>`;
     }
   }

@@ -896,6 +896,25 @@ export class Book {
     });
   }
 
+  async shotStamp(id, version) {
+    const meta = await this.readJson(`screens/${id}/meta.json`);
+    const entry = meta?.versions.find((item) => item.v === version);
+    const shown = await this.shownParts(meta, entry);
+    return shown ? Object.entries(shown).map(([name, v]) => `${name}.${v}`).join("-") : "";
+  }
+
+  thumbPath(id, version, stamp) {
+    return `screens/${id}/v${version}.thumb${stamp ? `.${stamp}` : ""}.webp`;
+  }
+
+  async thumb(id, version, stamp) {
+    return this.store.read(this.thumbPath(id, version, stamp));
+  }
+
+  async saveThumb(id, version, stamp, webp) {
+    return this.saving(`thumbnail of ${id} v${version}`, () => this.store.write(this.thumbPath(id, version, stamp), webp));
+  }
+
   async png(id, version) {
     return this.store.read(`screens/${id}/v${version}.png`);
   }

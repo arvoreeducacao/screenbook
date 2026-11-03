@@ -383,7 +383,7 @@ export function startAi({ base, state, refresh, toast, showProposal = () => {} }
       ${trailHtml(message, index)}
       ${message.text ? `<div class="ai-text">${formatReply(message.text)}${live ? '<span class="ai-caret"></span>' : ""}</div>` : ""}
       ${askCard(message, index)}
-      ${drew.length ? `<div class="ai-drew">${drew.map((item) => `<button type="button" class="ai-drew-card" data-drew="${index}" data-screen="${escapeHtml(item.screen)}" data-version="${item.version}"><img src="${base}/api/screens/${encodeURIComponent(item.screen)}/v${item.version}.png" alt="" loading="lazy"><span class="ai-drew-name"><b>${escapeHtml(screenLabel(item.screen))}</b><small>v${item.version}${item.proposal ? ` · ${escapeHtml(item.proposal)}` : ""}</small></span><span class="ai-drew-go">${t("Open")}</span></button>`).join("")}</div>` : ""}
+      ${drew.length ? `<div class="ai-drew">${drew.map((item) => `<button type="button" class="ai-drew-card" data-drew="${index}" data-screen="${escapeHtml(item.screen)}" data-version="${item.version}"><img src="${base}/api/screens/${encodeURIComponent(item.screen)}/v${item.version}.thumb.webp" alt="" loading="lazy"><span class="ai-drew-name"><b>${escapeHtml(screenLabel(item.screen))}</b><small>v${item.version}${item.proposal ? ` · ${escapeHtml(item.proposal)}` : ""}</small></span><span class="ai-drew-go">${t("Open")}</span></button>`).join("")}</div>` : ""}
       ${images.length ? `<div class="ai-shots">${images.map((src, shot) => `<button type="button" class="ai-shot" data-shot="${index}:${shot}"><img src="${src}" alt="${t("Screenshot the AI took")}"></button>`).join("")}</div>` : ""}
       ${message.error ? `<div class="ai-error">${escapeHtml(t(message.error))}</div>` : ""}
     </div>`;
