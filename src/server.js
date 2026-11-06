@@ -218,6 +218,17 @@ async function viewerPage(base) {
   return html.replace("</head>", `  <meta name="screenbook-base" content="${escapeHtml(base)}">\n</head>`);
 }
 
+const LINK_PREVIEW_BOTS = /Slackbot|Twitterbot|facebookexternalhit|LinkedInBot|WhatsApp|Discordbot|TelegramBot|SkypeUriPreview|Googlebot/i;
+
+function isLinkPreviewBot(request) {
+  return request.method === "GET" && LINK_PREVIEW_BOTS.test(String(request.headers["user-agent"] ?? ""));
+}
+
+function linkPreviewPage() {
+  const description = "One living canvas per product. Sign in with GitHub to open it.";
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Screenbook</title><meta name="description" content="${description}"><meta property="og:type" content="website"><meta property="og:site_name" content="Screenbook"><meta property="og:title" content="Screenbook"><meta property="og:description" content="${description}"><meta name="twitter:card" content="summary"><meta name="twitter:title" content="Screenbook"><meta name="twitter:description" content="${description}"></head><body><p>${description}</p></body></html>`;
+}
+
 function languageOf(request) {
   return pickLang(request.headers["accept-language"]);
 }
@@ -692,6 +703,7 @@ export function createViewerServer({ store, auth = null, live = createLive(), ai
     const user = internal ?? keyed ?? (auth ? (auth.user(request) ?? (presence ? await auth.userFromToken(request) : null)) : null);
     if (auth && !user) {
       if (/(^|\/)api\//.test(path)) return send(response, 401, { error: "sign in with your GitHub account" });
+      if (isLinkPreviewBot(request)) return send(response, 200, linkPreviewPage(), TYPES[".html"]);
       return auth.redirect(response, `/auth/login?next=${encodeURIComponent(url.pathname + url.search)}`);
     }
 

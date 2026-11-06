@@ -61,6 +61,19 @@ test("without a session the page redirects to the GitHub login and the API refus
   assert.equal((await fetch(`${base}/healthz`)).status, 200);
 });
 
+test("link preview bots get a page with the Screenbook card instead of the GitHub login", async () => {
+  const preview = await fetch(`${base}/visao-2030`, { redirect: "manual", headers: { "user-agent": "Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)" } });
+  assert.equal(preview.status, 200);
+  const html = await preview.text();
+  assert.match(html, /<meta property="og:title" content="Screenbook">/);
+  assert.match(html, /<meta property="og:description" content="[^"]+">/);
+  assert.doesNotMatch(html, /visao-2030/);
+  const person = await fetch(`${base}/visao-2030`, { redirect: "manual", headers: { "user-agent": "Mozilla/5.0 Firefox/130.0" } });
+  assert.equal(person.status, 302);
+  const api = await fetch(`${base}/api/overview`, { headers: { "user-agent": "Slackbot-LinkExpanding 1.0" } });
+  assert.equal(api.status, 401);
+});
+
 test("after the login, people land on the link they opened", async () => {
   const deep = await fetch(`${base}/?proposal=first-screens`, { redirect: "manual" });
   const loginPath = deep.headers.get("location");
