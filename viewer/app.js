@@ -3031,6 +3031,7 @@ live = shared ? null : startLive({
   applyView: () => {
     applyTransform();
   },
+  frame: (box) => zoomTo(box),
   onFollowLook: (screenId, version) => {
     if (!screenId) return state.overlay && closeOverlay();
     if (state.overlay?.screenId === screenId && state.overlay.version === version) return;

@@ -9,7 +9,7 @@ import { createViewerServer } from "../src/server.js";
 import { createLive } from "../src/live.js";
 import { buildTools } from "../src/mcp.js";
 import { presenceSender } from "../src/presence.js";
-import { agentSpot, ghostRect } from "../viewer/live.js";
+import { agentFocus, agentSpot, ghostRect } from "../viewer/live.js";
 
 const dir = await mkdtemp(join(tmpdir(), "screenbook-live-"));
 const store = localStore(dir);
@@ -176,6 +176,22 @@ test("the agent reads a screen from top to bottom and its new screen is reserved
   assert.deepEqual(ghostRect({ section: "other" }, placed, 300), { x: 360, y: 500, width: 300, height: 188 });
   assert.deepEqual(ghostRect({ proposal: "p", section: "deals" }, placed, 300), { x: 800, y: 0, width: 300, height: 188 });
   assert.deepEqual(ghostRect({ variantOf: "a" }, placed, 300), { x: 0, y: 260, width: 300, height: 188 });
+});
+
+test("following the agent frames the screen it works on, its proposal or its spot on the board, and stays put while it looks around", () => {
+  const placed = [
+    { item: { screen: { id: "a", section: "deals" }, version: 1, proposal: null }, x: 0, y: 0, width: 300, height: 200, reach: 300 },
+    { item: { screen: { id: "b", section: "deals" }, version: 2, proposal: { id: "p" } }, x: 400, y: 0, width: 300, height: 200, reach: 300 },
+    { item: { screen: { id: "c", section: "deals" }, version: 1, proposal: { id: "p" } }, x: 800, y: 100, width: 300, height: 240, reach: 300 },
+  ];
+  assert.deepEqual(agentFocus({ action: "reading", screen: "b", version: 2 }, placed), { box: { left: 400, top: 0, right: 700, bottom: 200 } });
+  assert.deepEqual(agentFocus({ action: "drawing", screen: "new", proposal: "p", section: "deals" }, placed), { box: { left: 1160, top: 100, right: 1460, bottom: 288 } });
+  assert.deepEqual(agentFocus({ action: "reading", proposal: "p" }, placed), { box: { left: 400, top: 0, right: 1100, bottom: 340 } });
+  assert.equal(agentFocus({ action: "looking" }, placed), null);
+  assert.equal(agentFocus({ action: "searching" }, placed), null);
+  const onBoard = { action: "drawing", page: "whiteboard", boardX: 120, boardY: 80 };
+  assert.deepEqual(agentFocus(onBoard, placed, { page: "whiteboard", boardPage: true }), { point: { x: 120, y: 80 } });
+  assert.equal(agentFocus(onBoard, placed, { page: "other", boardPage: true }), null);
 });
 
 test("presence without a name or a session is refused", async () => {

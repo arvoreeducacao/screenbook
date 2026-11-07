@@ -92,7 +92,35 @@ export function ghostRect(activity, placed, frameWidth) {
   return { x: anchor.x + (anchor.reach ?? anchor.width) + GHOST_GAP, y: anchor.y, width, height };
 }
 
-export function startLive({ base, state, viewport, people, myName, screenName, onAgentDrew, applyView, onFollowLook, pieceBox = () => null }) {
+function findPlaced(placed, screen, version) {
+  return placed.find((entry) => entry.item.screen.id === screen && entry.item.version === version) ?? placed.find((entry) => entry.item.screen.id === screen);
+}
+
+function boxAround(rects) {
+  if (!rects.length) return null;
+  return {
+    left: Math.min(...rects.map((rect) => rect.x)),
+    top: Math.min(...rects.map((rect) => rect.y)),
+    right: Math.max(...rects.map((rect) => rect.x + rect.width)),
+    bottom: Math.max(...rects.map((rect) => rect.y + rect.height)),
+  };
+}
+
+export function agentFocus(activity, placed, { page = null, boardPage = false } = {}) {
+  if (activity.page && boardPage) {
+    if (activity.page !== page || !Number.isFinite(activity.boardX)) return null;
+    return { point: { x: activity.boardX, y: activity.boardY } };
+  }
+  if (activity.screen) {
+    const entry = findPlaced(placed, activity.screen, activity.version);
+    if (entry) return { box: boxAround([entry]) };
+    if (activity.action === "drawing" && placed.length) return { box: boxAround([ghostRect(activity, placed, placed[0].width)]) };
+  }
+  const inProposal = activity.proposal ? boxAround(placed.filter((entry) => entry.item.proposal?.id === activity.proposal)) : null;
+  return inProposal ? { box: inProposal } : null;
+}
+
+export function startLive({ base, state, viewport, people, myName, screenName, onAgentDrew, applyView, onFollowLook, frame = null, pieceBox = () => null }) {
   const id = clientId();
   const layer = document.createElement("div");
   layer.id = "cursors";
@@ -146,7 +174,7 @@ export function startLive({ base, state, viewport, people, myName, screenName, o
     fetch(`${base}/api/live`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, cursor: outgoingCursor(), view: myView(), following }),
+      body: JSON.stringify({ id, cursor: outgoingCursor(), view: myView(), following: following?.person ?? null }),
     }).catch(() => {});
   }
 
@@ -159,10 +187,7 @@ export function startLive({ base, state, viewport, people, myName, screenName, o
   }
 
   function placedFor(screen, version) {
-    return (
-      state.placed.find((entry) => entry.item.screen.id === screen && entry.item.version === version) ??
-      state.placed.find((entry) => entry.item.screen.id === screen)
-    );
+    return findPlaced(state.placed, screen, version);
   }
 
   function anchorOf(point) {
@@ -339,45 +364,69 @@ export function startLive({ base, state, viewport, people, myName, screenName, o
   function removePerson(personId) {
     others.get(personId)?.element?.remove();
     others.delete(personId);
-    if (following === personId) stopFollowing();
+    if (following?.person === personId) stopFollowing();
   }
 
   function leaderLooking() {
-    const cursor = others.get(following)?.cursor;
+    const cursor = others.get(following?.person)?.cursor;
     return cursor?.looking && cursor.screen ? cursor : null;
   }
 
-  function steer() {
-    const leader = others.get(following);
-    if (!leader) return stopFollowing();
+  function moveView(move) {
     steering = true;
     try {
-      if (leader.view) {
-        state.manual = true;
-        state.scale = Math.min(3, Math.max(0.05, Math.min(viewport.clientWidth / leader.view.w, viewport.clientHeight / leader.view.h)));
-        state.tx = viewport.clientWidth / 2 - leader.view.cx * state.scale;
-        state.ty = viewport.clientHeight / 2 - leader.view.cy * state.scale;
-        applyView();
-      } else {
-        goTo(pointOf(leader.cursor));
-      }
+      move();
     } finally {
       steering = false;
     }
+  }
+
+  function steer() {
+    if (following?.agent) return steerToAgent();
+    const leader = others.get(following?.person);
+    if (!leader) return stopFollowing();
+    moveView(() => {
+      if (!leader.view) return goTo(pointOf(leader.cursor));
+      state.manual = true;
+      state.scale = Math.min(3, Math.max(0.05, Math.min(viewport.clientWidth / leader.view.w, viewport.clientHeight / leader.view.h)));
+      state.tx = viewport.clientWidth / 2 - leader.view.cx * state.scale;
+      state.ty = viewport.clientHeight / 2 - leader.view.cy * state.scale;
+      applyView();
+    });
     const looked = leaderLooking();
     onFollowLook(looked?.screen ?? null, looked?.version);
   }
 
-  function startFollowing(personId) {
-    const leader = others.get(personId);
-    if (!leader) return;
-    following = personId;
-    banner.style.setProperty("--c", leader.color);
-    banner.querySelector(".following-label").textContent = t("Following {name}", { name: leader.name });
+  function steerToAgent() {
+    const agent = agents.get(following.agent);
+    if (!agent) return stopFollowing();
+    const focus = agentFocus(agent.activity, state.placed, { page: state.page, boardPage: state.boardPage });
+    const framed = focus && JSON.stringify(focus);
+    if (!focus || framed === following.framed) return;
+    following.framed = framed;
+    moveView(() => (focus.box && frame ? frame(focus.box) : goTo(focus.point ?? { x: (focus.box.left + focus.box.right) / 2, y: (focus.box.top + focus.box.bottom) / 2 })));
+  }
+
+  function startFollowing(target, color, name) {
+    following = target;
+    banner.style.setProperty("--c", color);
+    banner.querySelector(".following-label").textContent = t("Following {name}", { name });
     banner.hidden = false;
     drawPeople();
     steer();
     schedule();
+  }
+
+  function followPerson(personId) {
+    const leader = others.get(personId);
+    if (leader) startFollowing({ person: personId }, leader.color, leader.name);
+  }
+
+  function followAgent(key) {
+    const agent = agents.get(key);
+    if (!agent) return;
+    onFollowLook(null);
+    startFollowing({ agent: key, framed: null }, "var(--agent)", `@${agent.activity.handle}`);
   }
 
   function stopFollowing() {
@@ -393,7 +442,9 @@ export function startLive({ base, state, viewport, people, myName, screenName, o
     if (event.key === "Escape") stopFollowing();
   });
   window.addEventListener("resize", () => {
-    if (following) steer();
+    if (!following) return;
+    following.framed = null;
+    steer();
   });
 
   function agentAge(activity) {
@@ -552,6 +603,7 @@ export function startLive({ base, state, viewport, people, myName, screenName, o
     const keys = new Set(list.map(agentKey));
     for (const [key, agent] of agents) {
       if (keys.has(key)) continue;
+      if (following?.agent === key) stopFollowing();
       agent.element?.remove();
       agent.ghostElement?.remove();
       agent.pieceElement?.remove();
@@ -570,17 +622,21 @@ export function startLive({ base, state, viewport, people, myName, screenName, o
       }
     }
     drawPeople();
+    if (following?.agent) steer();
   }
 
   function drawPeople() {
     const avatars = [];
-    for (const agent of agents.values()) {
-      if (agentAge(agent.activity) > AGENT_GONE_MS) continue;
-      avatars.push(`<button class="presence agent" data-agent="${escapeHtml(agentKey(agent.activity))}" title="@${escapeHtml(agent.activity.handle)}"><span class="spark">✦</span></button>`);
+    for (const [key, agent] of agents) {
+      const leading = following?.agent === key;
+      if (!leading && agentAge(agent.activity) > AGENT_GONE_MS) continue;
+      const name = `@${agent.activity.handle}`;
+      const title = leading ? t("Stop following {name}", { name }) : t("Follow {name}", { name });
+      avatars.push(`<button class="presence agent${leading ? " on" : ""}" style="--c:var(--agent)" data-agent="${escapeHtml(key)}" title="${escapeHtml(title)}" aria-pressed="${leading}"><span class="spark">✦</span></button>`);
     }
     for (const person of others.values()) {
       const face = person.avatar ? `<img src="${escapeHtml(person.avatar)}" alt="">` : escapeHtml(initials(person.name));
-      const leading = following === person.id;
+      const leading = following?.person === person.id;
       const watching = person.following === id;
       const classes = ["presence", leading && "on", watching && "watching"].filter(Boolean).join(" ");
       const title = leading ? t("Stop following {name}", { name: person.name }) : t(watching ? "Follow {name} (following you)" : "Follow {name}", { name: person.name });
@@ -603,11 +659,11 @@ export function startLive({ base, state, viewport, people, myName, screenName, o
   people.addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (!button) return;
-    if (button.dataset.agent) goTo(agents.get(button.dataset.agent)?.point);
-    if (button.dataset.person) {
-      if (following === button.dataset.person) stopFollowing();
-      else startFollowing(button.dataset.person);
-    }
+    const { agent, person } = button.dataset;
+    const leading = agent ? following?.agent === agent : following?.person === person;
+    if (leading) stopFollowing();
+    else if (agent) followAgent(agent);
+    else if (person) followPerson(person);
   });
 
   viewport.addEventListener("pointermove", (event) => {
@@ -627,6 +683,7 @@ export function startLive({ base, state, viewport, people, myName, screenName, o
     for (const agent of agents.values()) {
       if (BUSY.has(agent.activity.action) || agentAge(agent.activity) < AGENT_QUIET_MS) drawAgent(agent);
     }
+    if (following?.agent) steer();
   }, 1400);
 
   const query = new URLSearchParams({ id, name: myName() ?? "Visitante" });
@@ -658,7 +715,7 @@ export function startLive({ base, state, viewport, people, myName, screenName, o
     answerHighFive(person);
     tryHighFive();
     if (watchingChanged) drawPeople();
-    if (personId === following) steer();
+    if (personId === following?.person) steer();
   });
   stream.addEventListener("agents", (message) => setAgents(JSON.parse(message.data)));
 
