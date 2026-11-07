@@ -401,8 +401,13 @@ export function startLive({ base, state, viewport, people, myName, screenName, o
     const agent = agents.get(following.agent);
     if (!agent) return stopFollowing();
     const focus = agentFocus(agent.activity, state.placed, { page: state.page, boardPage: state.boardPage });
-    const framed = focus && JSON.stringify(focus);
-    if (!focus || framed === following.framed) return;
+    if (!focus) {
+      if (following.framed !== null || !agent.point) return;
+      following.framed = "where it was";
+      return moveView(() => goTo(agent.point));
+    }
+    const framed = JSON.stringify(focus);
+    if (framed === following.framed) return;
     following.framed = framed;
     moveView(() => (focus.box && frame ? frame(focus.box) : goTo(focus.point ?? { x: (focus.box.left + focus.box.right) / 2, y: (focus.box.top + focus.box.bottom) / 2 })));
   }
