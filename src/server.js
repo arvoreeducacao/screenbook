@@ -208,6 +208,7 @@ async function readBody(request, limit = 1_000_000) {
 const STATIC_FILES = new Set(["style.css", "app.js", "i18n.js", "i18n-pt.js", "live.js", "proposal.js", "annotations.js", "arrange.js", "pages.js", "tabs.js", "layers.js", "components.js", "menu.js", "zoom.js", "palette.js", "stickies.js", "ai.js", "logo.svg", "board.js", "board-model.js", "board.css"]);
 for (const file of ["ui.css", "shell.js", "devmode.css", "home.css", "home.js", "inspect.js", "history.js", "present.js", "export.js", "edit.js", "edit-ops.js", "edit.css"]) STATIC_FILES.add(file);
 STATIC_FILES.add("flow.js");
+STATIC_FILES.add("mentions.js");
 
 function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
@@ -399,6 +400,7 @@ async function rpcCall(request, response, methods, user = null) {
 
 function bookMethods(book, live, key) {
   const methods = { isMulti: () => false, ...Object.fromEntries([...RPC_METHODS].map((method) => [method, (...args) => book[method](...args)])) };
+  methods.comment = (input, ...rest) => book.comment({ ...input, login: undefined, people: undefined }, ...rest);
   methods.applyBoard = async (...args) => {
     const result = await book.applyBoard(...args);
     if (result.ops.length) live.emit({ key, name: "board", data: { page: result.page, rev: result.rev, ops: result.ops, client: null } });
@@ -416,7 +418,33 @@ function previewOf(body) {
   return json.length > 200_000 ? null : JSON.parse(json);
 }
 
-async function apiRoute({ book, key, live, ai, auth, request, response, path, url, user, makeThumb = defaultThumb }) {
+const LOCAL_LOGIN = "local";
+
+function rememberPerson(seen, user) {
+  if (!user?.login || user.via || user.login === LOCAL_LOGIN) return;
+  seen.set(user.login.toLowerCase(), { login: user.login, name: user.name || user.login, avatar: user.avatar ?? null });
+}
+
+async function peopleOf({ book, people, seen, user }) {
+  const found = new Map();
+  const add = (login, name, avatar) => {
+    if (typeof login !== "string" || !login || login === LOCAL_LOGIN) return;
+    const known = found.get(login.toLowerCase());
+    found.set(login.toLowerCase(), { login: known?.login ?? login, name: known?.name ?? String(name || login), avatar: known?.avatar ?? avatar ?? null });
+  };
+  const listed = people ? await people().catch(() => []) : [];
+  for (const person of listed) add(person.login, person.name, person.avatar);
+  if (user && !user.via) add(user.login, user.name, user.avatar);
+  for (const person of seen.values()) add(person.login, person.name, person.avatar);
+  for (const entry of await book.allComments()) if (entry.kind === "human") add(entry.login, entry.author, null);
+  return [...found.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || a.login.localeCompare(b.login));
+}
+
+async function knownLogins(context) {
+  return new Set((await peopleOf(context)).map((person) => person.login.toLowerCase()));
+}
+
+async function apiRoute({ book, key, live, ai, auth, request, response, path, url, user, people = null, seen = new Map(), makeThumb = defaultThumb }) {
   const language = languageOf(request);
   let match;
   if (request.method === "POST" && path === "/api/rpc") return rpcCall(request, response, bookMethods(book, live, key), user);
@@ -488,9 +516,18 @@ async function apiRoute({ book, key, live, ai, auth, request, response, path, ur
   if (request.method === "GET" && (match = path.match(/^\/api\/comments\/([\w-]+)$/))) {
     return send(response, 200, await book.comments(match[1]));
   }
+  if (request.method === "GET" && path === "/api/people") {
+    return send(response, 200, await peopleOf({ book, people, seen, user }));
+  }
   if (request.method === "POST" && path === "/api/comments") {
     const body = await readBody(request);
-    return send(response, 201, await book.comment({ ...body, author: user?.name ?? body.author, kind: "human" }));
+    const known = await knownLogins({ book, people, seen, user });
+    return send(response, 201, await book.comment({ ...body, author: user?.name ?? body.author, login: user?.login ?? LOCAL_LOGIN, people: known, kind: "human" }));
+  }
+  if (request.method === "PATCH" && (match = path.match(/^\/api\/comments\/([\w-]+)$/))) {
+    const body = await readBody(request);
+    const known = await knownLogins({ book, people, seen, user });
+    return send(response, 200, await book.editComment({ id: match[1], text: typeof body.text === "string" ? body.text : "", login: user?.login ?? LOCAL_LOGIN, people: known }));
   }
   if (request.method === "POST" && (match = path.match(/^\/api\/comments\/([\w-]+)\/resolve$/))) {
     const body = await readBody(request);
@@ -669,8 +706,9 @@ async function connectRoute({ request, response, url, auth, keys }) {
   return response.end();
 }
 
-export function createViewerServer({ store, auth = null, live = createLive(), ai = null, keys = createKeys({ store }), makeThumb = defaultThumb }) {
+export function createViewerServer({ store, auth = null, live = createLive(), ai = null, keys = createKeys({ store }), people = null, makeThumb = defaultThumb }) {
   const single = new Book(store);
+  const seen = new Map();
   const bookFor = productBooks(store);
   let multi = null;
   let checkedAt = 0;
@@ -708,10 +746,11 @@ export function createViewerServer({ store, auth = null, live = createLive(), ai
     }
 
     if (request.method === "POST" && path === "/api/keys/revoke" && user && !user.via) return send(response, 200, { revoked: await keys.revokeAll(user.login) });
+    rememberPerson(seen, user);
 
     if (!(await isMultiNow())) {
       if (request.method === "GET" && path === "/api/me") return send(response, 200, { auth: Boolean(auth), user, ai: Boolean(ai) });
-      if (path.startsWith("/api/")) return apiRoute({ book: single, key: "", live, ai, auth, request, response, path, url, user, makeThumb });
+      if (path.startsWith("/api/")) return apiRoute({ book: single, key: "", live, ai, auth, request, response, path, url, user, people, seen, makeThumb });
       if (request.method === "GET" && path === "/") return send(response, 200, await viewerPage(""), TYPES[".html"]);
       return send(response, 404, { error: "not found" });
     }
@@ -744,7 +783,7 @@ export function createViewerServer({ store, auth = null, live = createLive(), ai
       return response.end();
     }
     if (request.method === "GET" && rest === "/api/me") return send(response, 200, { auth: Boolean(auth), user, ai: Boolean(ai) });
-    if (rest.startsWith("/api/")) return apiRoute({ book, key: product, live, ai, auth, request, response, path: rest, url, user, makeThumb });
+    if (rest.startsWith("/api/")) return apiRoute({ book, key: product, live, ai, auth, request, response, path: rest, url, user, people, seen, makeThumb });
     if (request.method === "GET" && rest === "/") return send(response, 200, await viewerPage(`/${product}`), TYPES[".html"]);
     if (request.method === "GET" && STATIC_FILES.has(rest.slice(1))) return staticRoute(response, rest.slice(1));
     return send(response, 404, { error: "not found" });
@@ -752,7 +791,7 @@ export function createViewerServer({ store, auth = null, live = createLive(), ai
 
   return createServer((request, response) => {
     route(request, response).catch((error) => {
-      const status = error.status ?? (/^no (screen|proposal|comment|product)|has no version/.test(error.message) ? 404 : 400);
+      const status = error.status ?? (/^only the author/.test(error.message) ? 403 : /^no (screen|proposal|comment|product)|has no version/.test(error.message) ? 404 : 400);
       send(response, status, { error: error.message });
     });
   });

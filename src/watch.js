@@ -12,7 +12,7 @@ async function pendingEverywhere(store, handle, product) {
 }
 
 function keyOf(mention) {
-  return `${mention.product ?? ""}:${mention.comment}`;
+  return `${mention.product ?? ""}:${mention.comment}:${mention.at ?? ""}`;
 }
 
 export async function waitForMentions({

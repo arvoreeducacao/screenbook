@@ -419,3 +419,78 @@ test("a resolved conversation does not count and its mention stops waiting", asy
   assert.equal((await book.commentCounts()).list, 1);
   assert.equal((await book.pendingMentions("claude")).length, 0);
 });
+
+test("a comment from a signed-in person keeps the login, and old shapes stay the same", async () => {
+  const book = await freshBook();
+  await book.writeScreen({ proposal: "p", name: "List", section: "S", html: "<p>a</p>" });
+  const signed = await book.comment({ screen: "list", text: "bigger", author: "Ana Lima", login: "analima" });
+  assert.equal(signed.login, "analima");
+  const anonymous = await book.comment({ screen: "list", text: "smaller", author: "Visita" });
+  assert.equal("login" in anonymous, false);
+});
+
+test("tagging a person does not ask a chat, while a chat handle still does", async () => {
+  const book = await freshBook();
+  await book.writeScreen({ proposal: "p", name: "List", section: "S", html: "<p>a</p>" });
+  const people = new Set(["bia"]);
+  await book.comment({ screen: "list", text: "@Bia look at this", author: "Ana", login: "ana", people });
+  assert.equal(await book.store.read("mentions/bia.jsonl"), null);
+  const asked = await book.comment({ screen: "list", text: "@bia and @claude, bigger", author: "Ana", login: "ana", people });
+  assert.equal(await book.store.read("mentions/bia.jsonl"), null);
+  const pending = await book.pendingMentions("claude");
+  assert.deepEqual(pending.map((mention) => mention.comment), [asked.id]);
+});
+
+test("only the author edits a comment, and the edit is marked", async () => {
+  const book = await freshBook();
+  await book.writeScreen({ proposal: "p", name: "List", section: "S", html: "<p>a</p>" });
+  const root = await book.comment({ screen: "list", text: "bigger", author: "Ana", login: "Ana" });
+  const edited = await book.editComment({ id: root.id, text: "much bigger", login: "ana" });
+  assert.equal(edited.text, "much bigger");
+  assert.ok(edited.edited);
+  const [saved] = await book.comments("list");
+  assert.equal(saved.text, "much bigger");
+  assert.equal(saved.edited, edited.edited);
+  await assert.rejects(book.editComment({ id: root.id, text: "mine now", login: "bia" }), /only the author/);
+  await assert.rejects(book.editComment({ id: root.id, text: "   ", login: "ana" }), /empty/);
+  const answer = await book.reply({ comment: root.id, text: "ok", author: "claude" });
+  await assert.rejects(book.editComment({ id: answer.id, text: "changed", login: "claude" }), /only the author/);
+  const guest = await book.comment({ screen: "list", text: "hi", author: "Visita", kind: "guest" });
+  await assert.rejects(book.editComment({ id: guest.id, text: "changed", login: "local" }), /only the author/);
+  assert.equal((await book.comments("list"))[0].text, "much bigger");
+});
+
+test("an edit that adds a chat mention asks the chat once, and keeping it asks nothing more", async () => {
+  const book = await freshBook();
+  await book.writeScreen({ proposal: "p", name: "List", section: "S", html: "<p>a</p>" });
+  const root = await book.comment({ screen: "list", text: "@claude first", author: "Ana", login: "ana" });
+  const other = await book.comment({ screen: "list", text: "plain", author: "Ana", login: "ana" });
+  await book.reply({ comment: root.id, text: "done", author: "claude" });
+  const lines = async () => String((await book.store.read("mentions/claude.jsonl")) ?? "").split("\n").filter(Boolean).length;
+  assert.equal(await lines(), 1);
+  await book.editComment({ id: root.id, text: "@claude first, and the title too", login: "ana" });
+  assert.equal(await lines(), 1);
+  assert.equal((await book.pendingMentions("claude")).length, 0);
+  await book.editComment({ id: other.id, text: "plain, @claude look", login: "ana", people: new Set(["bia"]) });
+  assert.equal(await lines(), 2);
+  await book.editComment({ id: other.id, text: "plain, @claude look again", login: "ana" });
+  assert.equal(await lines(), 2);
+  const pending = await book.pendingMentions("claude");
+  assert.deepEqual(pending.map((mention) => mention.comment), [other.id]);
+  assert.equal(pending[0].text, "plain, @claude look");
+});
+
+test("a chat mention added by an edit waits even when the chat answered the thread before", async () => {
+  const book = await freshBook();
+  await book.writeScreen({ proposal: "p", name: "List", section: "S", html: "<p>a</p>" });
+  const root = await book.comment({ screen: "list", text: "bigger", author: "Ana", login: "ana" });
+  await book.comment({ screen: "list", text: "@claude smaller title", author: "Bia", login: "bia", replyTo: root.id });
+  await book.reply({ comment: root.id, text: "done", author: "claude" });
+  assert.equal((await book.pendingMentions("claude")).length, 0);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await book.editComment({ id: root.id, text: "bigger, @claude and the button", login: "ana" });
+  const pending = await book.pendingMentions("claude");
+  assert.deepEqual(pending.map((mention) => mention.comment), [root.id]);
+  await book.reply({ comment: root.id, text: "done too", author: "claude" });
+  assert.equal((await book.pendingMentions("claude")).length, 0);
+});

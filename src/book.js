@@ -22,6 +22,10 @@ export function mentionsIn(text) {
   return [...new Set([...String(text).matchAll(/(?:^|[^\w@])@([a-z][\w-]*)/gi)].map((match) => match[1].toLowerCase()))];
 }
 
+export function chatMentionsIn(text, people = new Set()) {
+  return mentionsIn(text).filter((handle) => !people.has(handle));
+}
+
 const REPEAT_WINDOW_MS = 15000;
 export const STICKY_COLORS = ["yellow", "pink", "green", "blue"];
 const SHARE_DAYS = 30;
@@ -1088,7 +1092,7 @@ export class Book {
     return parseLines(await this.store.read(`comments/${screen}.jsonl`));
   }
 
-  async comment({ screen, el, els, point, version, text, author, kind = "human", category, replyTo }) {
+  async comment({ screen, el, els, point, version, text, author, login, people = new Set(), kind = "human", category, replyTo }) {
     return this.saving(`${author} commented on ${screen}`, async () => {
       if (!text?.trim()) throw new Error("comment is empty");
       if (!author) throw new Error("comment needs an author");
@@ -1113,6 +1117,7 @@ export class Book {
         point: pointOf(point),
         version: version ?? null,
         author,
+        ...(login ? { login: String(login) } : {}),
         kind,
         ...(kind === "annotation" && category?.trim() ? { category: category.trim() } : {}),
         text,
@@ -1126,12 +1131,31 @@ export class Book {
       } else {
         await this.store.append(`comments/${screen}.jsonl`, `${JSON.stringify(entry)}\n`);
       }
-      if (kind === "human") {
-        for (const handle of mentionsIn(text)) {
-          const mention = { comment: entry.id, screen, el: entry.el, els: entry.els, version: entry.version, author, text, at: entry.at };
-          await this.store.append(`mentions/${handle}.jsonl`, `${JSON.stringify(mention)}\n`);
-        }
-      }
+      if (kind === "human") await this.notifyChats(entry, chatMentionsIn(text, people), entry.at);
+      return entry;
+    });
+  }
+
+  async notifyChats(entry, handles, at) {
+    for (const handle of handles) {
+      const mention = { comment: entry.id, screen: entry.screen, el: entry.el, els: entry.els, version: entry.version, author: entry.author, text: entry.text, at };
+      await this.store.append(`mentions/${handle}.jsonl`, `${JSON.stringify(mention)}\n`);
+    }
+  }
+
+  async editComment({ id, text, login, people = new Set() }) {
+    return this.saving(`${login} edited a comment`, async () => {
+      const found = await this.findComment(id);
+      const entries = await this.comments(found.screen);
+      const entry = entries.find((item) => item.id === found.id);
+      const owner = entry.kind === "human" && Boolean(login) && String(entry.login ?? "").toLowerCase() === String(login).toLowerCase();
+      if (!owner) throw new Error("only the author can edit this comment");
+      if (!String(text ?? "").trim()) throw new Error("comment is empty");
+      const asked = chatMentionsIn(entry.text, people);
+      entry.text = text;
+      entry.edited = now();
+      await this.store.write(`comments/${found.screen}.jsonl`, entries.map((item) => `${JSON.stringify(item)}\n`).join(""));
+      await this.notifyChats(entry, chatMentionsIn(text, people).filter((handle) => !asked.includes(handle)), entry.edited);
       return entry;
     });
   }
@@ -1216,7 +1240,7 @@ export class Book {
       if (thread.find((entry) => entry.id === root)?.resolved) return false;
       return !thread
         .slice(askedAt + 1)
-        .some((entry) => entry.kind === "agent" && (entry.author === handle || String(entry.author).startsWith(`${handle} via `)) && entry.replyTo === root);
+        .some((entry) => entry.kind === "agent" && (entry.author === handle || String(entry.author).startsWith(`${handle} via `)) && entry.replyTo === root && String(entry.at) >= String(mention.at));
     });
   }
 
