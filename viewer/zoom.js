@@ -4,6 +4,14 @@ import { t } from "./i18n.js";
 const MAP_KEY = "screenbook.minimap";
 const MAP_WIDTH = 196;
 const MAP_HEIGHT = 128;
+const WHEEL_LINE_PX = 16;
+const WHEEL_STEP_PX = 12;
+const WHEEL_RATE = 0.01;
+
+export function wheelZoomFactor({ deltaY, deltaMode }, pageHeight = 800) {
+  const pixels = deltaY * (deltaMode === 1 ? WHEEL_LINE_PX : deltaMode === 2 ? pageHeight : 1);
+  return Math.exp(-Math.max(-WHEEL_STEP_PX, Math.min(WHEEL_STEP_PX, pixels)) * WHEEL_RATE);
+}
 
 function read(key) {
   try {

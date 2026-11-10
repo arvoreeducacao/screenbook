@@ -13,7 +13,7 @@ import { FLOW, layoutFlow } from "./flow.js";
 import { createTabs } from "./tabs.js";
 import { createLayers } from "./layers.js";
 import { createComponents, partsStamp } from "./components.js";
-import { createZoom } from "./zoom.js";
+import { createZoom, wheelZoomFactor } from "./zoom.js";
 import { createPalette } from "./palette.js";
 import { createStickies } from "./stickies.js";
 import { startAi } from "./ai.js";
@@ -39,6 +39,10 @@ const ANNO_GAP = 40;
 const ANNO_WIDTH = 210;
 const ANNO_SPACE = ANNO_GAP + ANNO_WIDTH;
 const POLL_MS = 4000;
+const MIN_SCALE = 0.05;
+const MAX_SCALE = 3;
+const WHEEL_GLIDE_MS = 50;
+const WHEEL_SETTLED = 0.002;
 const BASE = document.querySelector('meta[name="screenbook-base"]')?.content ?? "";
 const HANDLE = (new URLSearchParams(location.search).get("handle") ?? "claude").toLowerCase();
 
@@ -1874,13 +1878,44 @@ function fit() {
   applyTransform();
 }
 
+function clampScale(scale) {
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
+}
+
 function zoomAt(factor, cx = viewport.clientWidth / 2, cy = viewport.clientHeight / 2) {
   state.manual = true;
-  const next = Math.min(3, Math.max(0.05, state.scale * factor));
+  const next = clampScale(state.scale * factor);
   state.tx = cx - (cx - state.tx) * (next / state.scale);
   state.ty = cy - (cy - state.ty) * (next / state.scale);
   state.scale = next;
   applyTransform();
+}
+
+let wheelZoom = null;
+
+function wheelZoomBy(factor, x, y) {
+  const glide = wheelZoom?.scale === state.scale ? wheelZoom : null;
+  wheelZoom = {
+    target: clampScale((glide?.target ?? state.scale) * factor),
+    x,
+    y,
+    scale: state.scale,
+    at: wheelZoom?.at ?? null,
+    frame: wheelZoom?.frame ?? requestAnimationFrame(glideWheelZoom),
+  };
+}
+
+function glideWheelZoom(now) {
+  const glide = wheelZoom;
+  if (glide.scale !== state.scale) return (wheelZoom = null);
+  const rest = glide.target / state.scale;
+  const settled = Math.abs(Math.log(rest)) < WHEEL_SETTLED;
+  const elapsed = glide.at === null ? 1000 / 60 : now - glide.at;
+  zoomAt(settled ? rest : rest ** (1 - Math.exp(-elapsed / WHEEL_GLIDE_MS)), glide.x, glide.y);
+  if (settled) return (wheelZoom = null);
+  glide.scale = state.scale;
+  glide.at = now;
+  glide.frame = requestAnimationFrame(glideWheelZoom);
 }
 
 function approvalsOf(proposal) {
@@ -3186,7 +3221,7 @@ viewport.addEventListener(
   "wheel",
   (event) => {
     event.preventDefault();
-    if (event.ctrlKey || event.metaKey) zoomAt(Math.exp(-event.deltaY * 0.01), event.clientX, event.clientY);
+    if (event.ctrlKey || event.metaKey) wheelZoomBy(wheelZoomFactor(event, viewport.clientHeight), event.clientX, event.clientY);
     else {
       state.tx -= event.deltaX;
       state.ty -= event.deltaY;
