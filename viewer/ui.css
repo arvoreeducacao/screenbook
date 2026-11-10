@@ -560,12 +560,12 @@ body.shared #side-tabs { display: none; }
 .mp-group { padding: 6px 8px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3); }
 .mp-option { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 6px 8px; border-radius: 6px; text-align: left; font-size: 12px; color: var(--ink); }
 .mp-option:hover { background: var(--hover); }
-.mp-option.on { background: var(--accent); color: #fff; }
+.mp-option.on { background: var(--accent-soft); }
 .mp-option .avatar { width: 20px; height: 20px; font-size: 8.5px; }
 .mp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .mp-login, .mp-hint { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--ink-3); }
 .mp-login { font-family: var(--mono); }
-.mp-option.on .mp-login, .mp-option.on .mp-hint { color: rgba(255, 255, 255, 0.85); }
+.mp-option.on .mp-login, .mp-option.on .mp-hint { color: var(--ink-2); }
 .mp-foot { margin-top: 4px; padding: 7px 8px 3px; border-top: 1px solid var(--line); font-size: 10.5px; color: var(--ink-3); }
 
 .comments-panel { padding: 0; gap: 0; overflow: hidden; display: flex; flex-direction: column; }
