@@ -133,3 +133,69 @@ test("a conversation is resolved and reopened through the API", async () => {
   const missing = await fetch(`${base}/api/comments/nope1234/resolve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ by: "Bia" }) });
   assert.equal(missing.status, 404);
 });
+
+test("only the author of a comment edits it through the API", async () => {
+  const mine = await book.comment({ screen: "list", text: "taller", author: "You", login: "local" });
+  const theirs = await book.comment({ screen: "list", text: "wider", author: "Rafa", login: "rafa" });
+  const edit = (id, body) => fetch(`${base}/api/comments/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const saved = await edit(mine.id, { text: "much taller" });
+  assert.equal(saved.status, 200);
+  const entry = await saved.json();
+  assert.equal(entry.text, "much taller");
+  assert.ok(entry.edited);
+  const refused = await edit(theirs.id, { text: "mine now" });
+  assert.equal(refused.status, 403);
+  assert.equal((await book.comments("list")).find((item) => item.id === theirs.id).text, "wider");
+  assert.equal((await edit(mine.id, { text: "" })).status, 400);
+  assert.equal((await edit("nope1234", { text: "x" })).status, 404);
+  const form = await fetch(`${base}/api/comments/${mine.id}`, { method: "PATCH", body: "text=x" });
+  assert.equal(form.status, 415);
+});
+
+test("people come from whoever commented when there is no repository to ask, and tagging them asks no chat", async () => {
+  await book.comment({ screen: "list", text: "hello", author: "Bia Souza", login: "biasouza" });
+  const people = await (await fetch(`${base}/api/people`)).json();
+  const bia = people.find((person) => person.login === "biasouza");
+  assert.deepEqual(bia, { login: "biasouza", name: "Bia Souza", avatar: null });
+  assert.ok(people.some((person) => person.login === "rafa"));
+  assert.ok(!people.some((person) => person.login === "local"));
+  const names = people.map((person) => person.name);
+  assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })));
+  const posted = await fetch(`${base}/api/comments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ screen: "list", text: "@biasouza and @claude, check", author: "Marina", login: "someone-else" }),
+  });
+  const entry = await posted.json();
+  assert.equal(entry.login, "local");
+  assert.equal(await store.read("mentions/biasouza.jsonl"), null);
+  assert.ok((await book.pendingMentions("claude")).some((mention) => mention.comment === entry.id));
+});
+
+test("the people list merges the repository's people with commenters, and falls back when the repository fails", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "screenbook-people-"));
+  const own = new Book(localStore(dir));
+  await own.init({ name: "People" });
+  await own.writeScreen({ proposal: "p", name: "List", section: "S", html: "<p>a</p>" });
+  await own.comment({ screen: "list", text: "hi", author: "Old Name", login: "Tiago" });
+  let failing = false;
+  const people = async () => {
+    if (failing) throw new Error("GitHub is down");
+    return [{ login: "tiago", name: "Tiago Alves", avatar: "https://avatars.example/t.png" }, { login: "lara", name: "Lara Mendes", avatar: null }];
+  };
+  const running = createViewerServer({ store: localStore(dir), people });
+  await new Promise((resolve) => running.listen(0, "127.0.0.1", resolve));
+  const address = `http://127.0.0.1:${running.address().port}`;
+  try {
+    const merged = await (await fetch(`${address}/api/people`)).json();
+    assert.deepEqual(merged, [
+      { login: "lara", name: "Lara Mendes", avatar: null },
+      { login: "tiago", name: "Tiago Alves", avatar: "https://avatars.example/t.png" },
+    ]);
+    failing = true;
+    const fallback = await (await fetch(`${address}/api/people`)).json();
+    assert.deepEqual(fallback, [{ login: "Tiago", name: "Old Name", avatar: null }]);
+  } finally {
+    running.close();
+  }
+});

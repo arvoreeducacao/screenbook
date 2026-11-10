@@ -99,9 +99,10 @@ if (command === "init") {
   const { createViewerServer } = await import("../src/server.js");
   const { authFromEnvironment, createAuth } = await import("../src/auth.js");
   const { singleWriter } = await import("../src/store/single-writer.js");
-  const { repoAccess } = await import("../src/github-app.js");
+  const { repoAccess, repoPeople } = await import("../src/github-app.js");
   const settings = authFromEnvironment();
   const canRead = process.env.SCREENBOOK_ACCESS_REPO ? repoAccess({ repo: process.env.SCREENBOOK_ACCESS_REPO }) : store.canRead?.bind(store);
+  const people = process.env.SCREENBOOK_ACCESS_REPO ? repoPeople({ repo: process.env.SCREENBOOK_ACCESS_REPO }) : null;
   const auth = settings ? createAuth({ ...settings, canRead }) : null;
   const written = store.kind === "github" ? store : singleWriter(store);
   const local = ["127.0.0.1", "localhost", "::1"].includes(values.host);
@@ -109,7 +110,7 @@ if (command === "init") {
   const ai = (auth || local) && process.env.SCREENBOOK_AI !== "off"
     ? createAi({ store: written, secret: process.env.SCREENBOOK_SESSION_SECRET, origin: () => `http://127.0.0.1:${server.address().port}` })
     : null;
-  const server = createViewerServer({ store: written, auth, ai });
+  const server = createViewerServer({ store: written, auth, ai, people });
   server.listen(Number(values.port), values.host, () => {
     process.stdout.write(`screenbook on http://${values.host}:${values.port} · ${store.describe()}${auth ? " · GitHub login" : ""}\n`);
   });

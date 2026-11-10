@@ -18,6 +18,8 @@ import { createPalette } from "./palette.js";
 import { createStickies } from "./stickies.js";
 import { startAi } from "./ai.js";
 import { lang, t, translateDom } from "./i18n.js";
+import { openMenu } from "./menu.js";
+import { LOCAL_LOGIN, attachMentionPicker, chatHandlesIn, closeMentionPicker, fold, handlesIn, initials, peopleMap, photoHtml, photoOf, replaceHandles, tagsLogin, watchPhotos } from "./mentions.js";
 
 translateDom(document.body);
 document.documentElement.lang = lang;
@@ -71,6 +73,9 @@ const state = {
   showAnnotations: true,
   archivedOpen: false,
   device: "all",
+  people: new Map(),
+  editingComment: null,
+  commentsPanel: { open: false, tab: "open", filter: "all", query: "" },
 };
 
 function storageGet(key) {
@@ -95,18 +100,30 @@ function formatAnnotation(text) {
   return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
 }
 
+function mentionChip(handle) {
+  const person = state.people.get(handle.toLowerCase());
+  if (person) {
+    const url = photoOf(person.login, state.people);
+    const you = Boolean(signedIn?.login) && person.login.toLowerCase() === signedIn.login.toLowerCase();
+    return `<span class="mention ${you ? "you" : "person"}" title="@${escapeHtml(person.login)}">${url ? photoHtml(url) : ""}${escapeHtml(person.name)}</span>`;
+  }
+  return `<span class="mention${handle.toLowerCase() === HANDLE ? " chat" : ""}">@${handle}</span>`;
+}
+
 function withMentions(text) {
-  return escapeHtml(text).replace(/(^|[^\w@])@([a-z][\w-]*)/gi, '$1<span class="mention">@$2</span>');
+  return replaceHandles(escapeHtml(text), mentionChip);
+}
+
+function avatarHtml(message) {
+  const agent = message.kind === "agent";
+  const url = agent ? null : photoOf(message.login, state.people);
+  return `<span class="avatar${agent ? " agent" : ""}${url ? " has-photo" : ""}">${url ? photoHtml(url, initials(message.author)) : escapeHtml(initials(message.author))}</span>`;
 }
 
 function authorTag(message) {
   if (message.kind === "agent") return ' <span class="tag plain">chat</span>';
   if (message.kind === "guest") return ` <span class="tag plain">${t("via link")}</span>`;
   return "";
-}
-
-function initials(name) {
-  return String(name).split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0].toUpperCase()).join("") || "?";
 }
 
 function timeAgo(iso) {
@@ -146,8 +163,29 @@ function post(path, body) {
   return api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 
+function patch(path, body) {
+  return api(path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+
 let signedIn = null;
 let shared = null;
+let localMode = false;
+
+function myLogin() {
+  return signedIn?.login ?? (localMode ? LOCAL_LOGIN : null);
+}
+
+async function loadPeople() {
+  if (shared) return;
+  try {
+    state.people = peopleMap(await api(`${BASE}/api/people`));
+    rerenderComments();
+  } catch {}
+}
+
+function attachPicker(field) {
+  if (!shared) attachMentionPicker(field, { people: () => state.people, chats: () => [HANDLE] });
+}
 
 function myName() {
   return signedIn?.name ?? storageGet("screenbook.name");
@@ -882,14 +920,15 @@ function renderPins() {
     const point = pointFor(thread.root, placed.item.version);
     if (!point) continue;
     const pin = document.createElement("button");
-    pin.className = `pin${state.note?.root === thread.root.id ? " open" : ""}`;
+    const photo = photoOf(thread.root.login, state.people);
+    pin.className = `pin${photo ? " has-photo" : ""}${state.note?.root === thread.root.id ? " open" : ""}`;
     pin.dataset.root = thread.root.id;
     pin.style.left = `${point.x * 100}%`;
     pin.style.top = `${point.y * 100}%`;
     pin.style.setProperty("--c", thread.waiting ? PIN_COLORS.waiting : PIN_COLORS.human);
     pin.title = `${thread.root.author}: ${thread.root.text}`;
     pin.setAttribute("aria-label", t("Comment by {author}", { author: thread.root.author }));
-    pin.innerHTML = `<span>${escapeHtml(initials(thread.root.author))}</span>${thread.messages.length > 1 ? `<em>${thread.messages.length}</em>` : ""}`;
+    pin.innerHTML = `<span>${photo ? photoHtml(photo, initials(thread.root.author)) : escapeHtml(initials(thread.root.author))}</span>${thread.messages.length > 1 ? `<em>${thread.messages.length}</em>` : ""}`;
     pin.addEventListener("pointerdown", (event) => event.stopPropagation());
     pin.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -908,16 +947,18 @@ function renderPins() {
     if (placed) highlight(placed.element.querySelector(".pins"), placed.item, draft.els, "picked");
     if (placed) {
       const pin = document.createElement("span");
-      pin.className = "pin draft";
+      const photo = photoOf(signedIn?.login, state.people);
+      pin.className = `pin draft${photo ? " has-photo" : ""}`;
       pin.style.left = `${draft.point.x * 100}%`;
       pin.style.top = `${draft.point.y * 100}%`;
       pin.style.setProperty("--c", "var(--prop)");
-      pin.innerHTML = `<span>${escapeHtml(initials(myName() || "?"))}</span>`;
+      pin.innerHTML = `<span>${photo ? photoHtml(photo, initials(myName() || "?")) : escapeHtml(initials(myName() || "?"))}</span>`;
       placed.element.querySelector(".pins").appendChild(pin);
     }
   }
   renderAnnotations();
   placeNote();
+  renderCommentsPanel();
 }
 
 function setTool(tool) {
@@ -927,6 +968,143 @@ function setTool(tool) {
   viewport.classList.toggle("editing", tool === "edit");
   viewport.classList.toggle("noting", tool === "sticky");
   if (tool === "comment") deselect();
+  state.commentsPanel.open = tool === "comment";
+  renderCommentsPanel();
+}
+
+const SEARCH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>';
+const BUBBLE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5a8.5 8.5 0 1 1-4.2 15.9L3.5 20.5l1.1-4.3A8.5 8.5 0 0 1 12 3.5z"/></svg>';
+
+function pageThreads() {
+  return threadsOf(splitAnnotations(withPending(state.data?.notes ?? [])).comments).filter((thread) => placedFor(thread.root));
+}
+
+function lastActivity(thread) {
+  return thread.messages.flatMap((message) => [message.at, message.edited]).filter(Boolean).map(String).reduce((latest, at) => (at > latest ? at : latest), "");
+}
+
+function threadMatches(thread, query) {
+  const wanted = fold(query.trim());
+  if (!wanted) return true;
+  return thread.messages.some((message) => {
+    const tagged = handlesIn(message.text).map((handle) => state.people.get(handle)?.name ?? "");
+    return [message.text, message.author, ...tagged].some((text) => fold(text).includes(wanted));
+  });
+}
+
+function mentionsMe(thread) {
+  return Boolean(signedIn?.login) && thread.messages.some((message) => tagsLogin(message.text, signedIn.login));
+}
+
+function hasMentions(thread) {
+  return thread.messages.some((message) => handlesIn(message.text).length > 0);
+}
+
+function commentItemHtml(thread) {
+  const { root, messages } = thread;
+  const screen = screenById(root.screen);
+  const where = [screen?.number, screen?.name ?? root.screen, prettyPiece(root.el ?? t("whole screen"))].filter((part) => part !== undefined && part !== "").join(" · ");
+  const replies = messages.length - 1;
+  const done = root.resolved ? `<span class="cmp-done">${escapeHtml(t("✓ Resolved by {name} · {time}", { name: root.resolved.by ?? t("someone"), time: timeAgo(root.resolved.at) }))}</span>` : "";
+  const replied = messages.at(-1).kind === "agent" ? `<span class="tag agent">${t("✦ chat replied")}</span>` : "";
+  const count = replies ? `<span>${t(replies === 1 ? "1 reply" : "{n} replies", { n: replies })}</span>` : "";
+  const foot = done || replied || count ? `<span class="cmp-foot">${done}${replied}${count}</span>` : "";
+  return `<button type="button" class="cmp-item${state.note?.root === root.id ? " on" : ""}${root.resolved ? " done" : ""}" data-root="${escapeHtml(root.id)}">${avatarHtml(root)}<span class="cmp-body"><span class="cmp-top"><b>${escapeHtml(root.author)}</b><span class="cmp-t">${messageTime(root)}</span>${
+    root.edited ? `<span class="cmp-t">${t("· edited")}</span>` : ""
+  }</span><span class="cmp-where">${escapeHtml(where)}</span><span class="cmp-text">${withMentions(root.text)}</span>${foot}</span></button>`;
+}
+
+function buildCommentsPanel(panel) {
+  panel.innerHTML = `<div class="cmp-head"><b>${t("Comments")}</b><span class="muted">${t("on this page")}</span><span class="grow"></span><button type="button" class="icon-btn" data-cmp="close" title="${t("Close")}" aria-label="${t("Close")}">✕</button></div>
+    <div class="cmp-tools">
+      <label class="ly-search">${SEARCH_ICON}<input id="cmp-search" type="search" autocomplete="off" placeholder="${t("Search the comments")}" aria-label="${t("Search the comments")}"></label>
+      <div class="seg cmp-seg" role="tablist"><button type="button" role="tab" data-cmp-tab="open"></button><button type="button" role="tab" data-cmp-tab="resolved"></button></div>
+      <div class="cmp-chips"><button type="button" class="cmp-chip" data-cmp-filter="all">${t("All")}</button><button type="button" class="cmp-chip" data-cmp-filter="you"></button><button type="button" class="cmp-chip" data-cmp-filter="mentions">${t("With mentions")}</button></div>
+    </div>
+    <div class="cmp-list" id="cmp-list"></div>`;
+  const view = state.commentsPanel;
+  panel.querySelector('[data-cmp="close"]').addEventListener("click", () => {
+    view.open = false;
+    renderCommentsPanel();
+  });
+  panel.querySelector("#cmp-search").addEventListener("input", (event) => {
+    view.query = event.target.value;
+    renderCommentsPanel();
+  });
+  panel.querySelectorAll("[data-cmp-tab]").forEach((button) =>
+    button.addEventListener("click", () => {
+      view.tab = button.dataset.cmpTab;
+      renderCommentsPanel();
+    }),
+  );
+  panel.querySelectorAll("[data-cmp-filter]").forEach((button) =>
+    button.addEventListener("click", () => {
+      view.filter = button.dataset.cmpFilter;
+      renderCommentsPanel();
+    }),
+  );
+  panel.querySelector("#cmp-list").addEventListener("click", (event) => {
+    const item = event.target.closest("[data-root]");
+    if (item) openFromCommentsPanel(item.dataset.root);
+  });
+}
+
+function renderCommentsPanel() {
+  const panel = $("#comments-panel");
+  const view = state.commentsPanel;
+  panel.hidden = !view.open || !state.data;
+  if (panel.hidden) return;
+  if (!panel.firstElementChild) buildCommentsPanel(panel);
+  if (view.filter === "you" && !signedIn) view.filter = "all";
+  const onPage = pageThreads();
+  const found = onPage.filter((thread) => threadMatches(thread, view.query));
+  const open = found.filter((thread) => !thread.root.resolved);
+  const resolved = found.filter((thread) => thread.root.resolved);
+  const tabbed = view.tab === "resolved" ? resolved : open;
+  const mine = tabbed.filter(mentionsMe);
+  const shown = (view.filter === "you" ? mine : view.filter === "mentions" ? tabbed.filter(hasMentions) : tabbed).sort((a, b) => lastActivity(b).localeCompare(lastActivity(a)));
+  const labels = { open: t("Open {n}", { n: `<span class="n">${open.length}</span>` }), resolved: t("Resolved {n}", { n: `<span class="n">${resolved.length}</span>` }) };
+  panel.querySelectorAll("[data-cmp-tab]").forEach((button) => {
+    const on = button.dataset.cmpTab === view.tab;
+    button.innerHTML = labels[button.dataset.cmpTab];
+    button.classList.toggle("on", on);
+    button.setAttribute("aria-selected", String(on));
+  });
+  const you = panel.querySelector('[data-cmp-filter="you"]');
+  you.hidden = !signedIn;
+  you.innerHTML = `${t("Mention you")}${mine.length ? ` <b>${mine.length}</b>` : ""}`;
+  panel.querySelectorAll("[data-cmp-filter]").forEach((button) => {
+    const on = button.dataset.cmpFilter === view.filter;
+    button.classList.toggle("on", on);
+    button.setAttribute("aria-pressed", String(on));
+  });
+  const list = panel.querySelector("#cmp-list");
+  if (!onPage.length) {
+    list.innerHTML = `<div class="cmp-empty"><span class="cmp-empty-icon">${BUBBLE_ICON}</span><b>${t("No comments on this page")}</b><span class="muted">${t("With the comment tool on, click a piece of a screen. Type @ to tag someone.")}</span></div>`;
+    return;
+  }
+  list.innerHTML = shown.length ? shown.map(commentItemHtml).join("") : `<p class="muted cmp-none">${t("Nothing here with these filters.")}</p>`;
+}
+
+async function openFromCommentsPanel(rootId) {
+  const thread = pageThreads().find((entry) => entry.root.id === rootId);
+  if (!thread) return;
+  const placed = placedFor(thread.root);
+  if (phone()) {
+    state.commentsPanel.open = false;
+    renderCommentsPanel();
+  }
+  if (thread.root.resolved) {
+    await openOverlay(thread.root.screen, placed?.item.version ?? thread.root.version);
+    if (!state.overlay) return;
+    state.overlay.showResolved = true;
+    setPanel("talk");
+    renderSide();
+    $(`#ov-side .thread[data-root="${CSS.escape(rootId)}"]`)?.scrollIntoView({ block: "nearest" });
+    return;
+  }
+  if (placed) zoomTo({ left: placed.x - 60, top: placed.y - 110, right: placed.x + (placed.reach ?? placed.width) + 60, bottom: placed.y + placed.height + 60 });
+  openThread(rootId);
 }
 
 function startDraft(item, box, event) {
@@ -955,7 +1133,9 @@ function openThread(rootId) {
 
 function closeNote() {
   if (!state.note) return;
+  closeMentionPicker();
   state.note = null;
+  if (state.editingComment?.where === "note") state.editingComment = null;
   $("#note").hidden = true;
   renderPins();
 }
@@ -974,9 +1154,10 @@ function placeNote() {
   const rect = anchor.getBoundingClientRect();
   const width = note.offsetWidth;
   const height = note.offsetHeight;
+  const right = window.innerWidth - panelInset() - 12;
   let left = rect.right + 10;
-  if (left + width > window.innerWidth - 12) left = rect.left - width - 10;
-  left = Math.max(12, Math.min(left, window.innerWidth - width - 12));
+  if (left + width > right) left = rect.left - width - 10;
+  left = Math.max(12, Math.min(left, right - width));
   const top = Math.max(12, Math.min(rect.top - 8, window.innerHeight - height - 12));
   note.style.left = `${left}px`;
   note.style.top = `${top}px`;
@@ -984,10 +1165,12 @@ function placeNote() {
 
 function renderNote(keepText = "") {
   const note = $("#note");
+  closeMentionPicker();
   if (!state.note) {
     note.hidden = true;
     return;
   }
+  const editCaret = caretIn(note);
   if (state.note.draft) {
     const { els } = state.note.draft;
     const chips = els.length
@@ -1002,7 +1185,7 @@ function renderNote(keepText = "") {
             }</div>`
       }
       <form class="note-form" id="note-form">
-      <textarea id="note-text" rows="3" placeholder="${shared ? t("Write a comment") : t("Write a comment, and tag @{handle} to ask the chat", { handle: HANDLE })}" required></textarea>
+      <textarea id="note-text" rows="3" placeholder="${shared ? t("Write a comment") : t("Write a comment. @ tags a person or @{handle} asks the chat", { handle: HANDLE })}" required></textarea>
       <div class="row"><span class="muted grow">${t("Enter sends · Esc cancels")}</span><button class="btn primary sm">${t("Comment")}</button></div>
     </form>`;
   } else {
@@ -1011,13 +1194,9 @@ function renderNote(keepText = "") {
     note.innerHTML = `<div class="note-head"><b>${screenById(thread.root.screen)?.number ?? ""} · ${escapeHtml(screenById(thread.root.screen)?.name ?? thread.root.screen)}</b>${shared ? "" : `<button class="icon-btn" data-action="edit-thread" title="${t("Edit these pieces")}" aria-label="${t("Edit these pieces")}">✎</button>`}${
       shared || thread.root.pending ? "" : `<button class="icon-btn" data-action="resolve" title="${t("Resolve thread")}" aria-label="${t("Resolve thread")}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>`
     }<button class="icon-btn" data-action="expand" title="${t("Open screen at full size")}" aria-label="${t("Open screen at full size")}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg></button><button class="icon-btn" data-action="close" aria-label="${t("Close")}">✕</button></div>
-      <div class="note-msgs">${thread.messages
-        .map(
-          (message) => `<div class="msg${message.pending ? " pending" : ""}"><span class="avatar ${message.kind === "agent" ? "agent" : ""}">${escapeHtml(initials(message.author))}</span><div class="bd"><div class="nm">${escapeHtml(message.author)}${
-            authorTag(message)
-          }<span class="t">${messageTime(message)}</span></div>${withMentions(message.text)}</div></div>`,
-        )
-        .join("")}${thread.waiting ? `<div class="waiting-line"><i class="dot" style="background:var(--agent)"></i>${t("waiting for a chat to reply")}</div>` : ""}</div>
+      <div class="note-msgs">${thread.messages.map((message) => messageHtml(message, "note")).join("")}${
+        thread.waiting ? `<div class="waiting-line"><i class="dot" style="background:var(--agent)"></i>${t("waiting for a chat to reply")}</div>` : ""
+      }</div>
       <form class="note-form" id="note-form"><textarea id="note-text" rows="1" placeholder="${t("Reply")}" required></textarea><div class="row end"><button class="btn primary sm">${t("Reply")}</button></div></form>`;
     note.querySelector('[data-action="close"]').addEventListener("click", closeNote);
     note.querySelector('[data-action="resolve"]')?.addEventListener("click", () => resolveThread(thread.root.id));
@@ -1035,6 +1214,8 @@ function renderNote(keepText = "") {
   note.hidden = false;
   const text = $("#note-text");
   if (keepText) text.value = keepText;
+  attachPicker(text);
+  const editing = bindMessages(note, "note", editCaret);
   note.querySelector('[data-action="ask"]')?.addEventListener("click", () => {
     if (!new RegExp(`@${HANDLE}\\b`, "i").test(text.value)) text.value = `@${HANDLE} ${text.value}`.trimEnd() + " ";
     text.focus();
@@ -1056,7 +1237,7 @@ function renderNote(keepText = "") {
   });
   $("#note-form").addEventListener("submit", submitNote);
   placeNote();
-  text.focus();
+  if (!editing) text.focus();
 }
 
 async function submitNote(event) {
@@ -1069,7 +1250,7 @@ async function submitNote(event) {
     const sent = await sendComment({ screen: item.screen.id, el, els: els.length ? els : null, point, version: item.version, text });
     if (!sent) return;
     state.note = { root: sent.id };
-    if (/@[a-z]/i.test(text)) toast(t("Sent to @{handle}. It reaches whichever chat is listening.", { handle: HANDLE }));
+    if (chatHandlesIn(text, state.people).length) toast(t("Sent to @{handle}. It reaches whichever chat is listening.", { handle: HANDLE }));
   } else {
     const root = noteThreads().find((entry) => entry.root.id === state.note.root)?.root;
     if (!root) return;
@@ -1630,7 +1811,7 @@ function focusOn(focus, reserveRight = 0) {
 
 function panelInset() {
   if (viewport.clientWidth <= 760) return 0;
-  return ["#inspector", "#ai-panel"].map((id) => $(id)).filter((node) => node && !node.hidden && !node.classList.contains("docked")).reduce((most, node) => Math.max(most, node.offsetWidth), 0);
+  return ["#inspector", "#ai-panel", "#comments-panel"].map((id) => $(id)).filter((node) => node && !node.hidden && !node.classList.contains("docked")).reduce((most, node) => Math.max(most, node.offsetWidth), 0);
 }
 
 function sidebarInset() {
@@ -1926,7 +2107,7 @@ async function resolveThread(root, reopen = false) {
 function rerenderComments() {
   if (!state.data) return;
   renderPins();
-  if (state.note?.root && !$("#note-text")?.value) renderNote();
+  if (state.note?.root && !$("#note-text")?.value && state.editingComment?.where !== "note") renderNote();
   if (state.overlay) renderSide();
 }
 
@@ -1958,6 +2139,7 @@ async function sendComment({ screen, el, els, point, version, text, replyTo }) {
     point: point ?? null,
     version: version ?? null,
     author: name,
+    ...(myLogin() ? { login: myLogin() } : {}),
     kind: "human",
     text,
     replyTo: replyTo ?? null,
@@ -1985,10 +2167,122 @@ function threadsOf(comments) {
   const roots = comments.filter((entry) => !entry.replyTo);
   return roots.map((root) => {
     const messages = [root, ...comments.filter((entry) => entry.replyTo === root.id)];
-    const lastHuman = messages.findLastIndex((entry) => entry.kind === "human" && /@[a-z]/i.test(entry.text));
+    const lastHuman = messages.findLastIndex((entry) => entry.kind === "human" && chatHandlesIn(entry.text, state.people).length > 0);
     const lastAgent = messages.findLastIndex((entry) => entry.kind === "agent");
     return { root, messages, waiting: lastHuman > lastAgent ? messages[lastHuman] : null };
   });
+}
+
+function canEditComment(message) {
+  const login = myLogin();
+  return !shared && Boolean(login) && message.kind === "human" && !message.pending && typeof message.login === "string" && message.login.toLowerCase() === login.toLowerCase();
+}
+
+function messageHtml(message, where, extra = "") {
+  const editing = state.editingComment?.id === message.id && state.editingComment.where === where;
+  const more = canEditComment(message) && !editing
+    ? `<button type="button" class="icon-btn msg-more" data-more="${escapeHtml(message.id)}" title="${t("More actions")}" aria-label="${t("More actions")}">⋯</button>`
+    : "";
+  const body = editing
+    ? `<div class="msg-edit"><textarea class="edit-text" rows="2" aria-label="${t("Edit")}">${escapeHtml(state.editingComment.text)}</textarea><div class="msg-edit-row"><button type="button" class="btn sm" data-edit="cancel">${t("Cancel")}</button><button type="button" class="btn primary sm" data-edit="save">${t("Save")}</button></div></div>`
+    : withMentions(message.text);
+  return `<div class="msg${message.pending ? " pending" : ""}">${avatarHtml(message)}<div class="bd"><div class="nm">${escapeHtml(message.author)}${authorTag(message)}<span class="t">${messageTime(message)}${extra}</span>${
+    message.edited ? `<span class="t">${t("· edited")}</span>` : ""
+  }${more}</div>${body}</div></div>`;
+}
+
+function caretIn(container) {
+  const field = container.querySelector(".edit-text");
+  return field && document.activeElement === field ? field.selectionStart : null;
+}
+
+function bindMessages(container, where, caret = null) {
+  container.querySelectorAll("[data-more]").forEach((button) =>
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const id = button.dataset.more;
+      openMenu({ menu: $("#frame-menu"), close: closeFrameMenu, event, entries: [{ label: t("Edit"), run: () => startCommentEdit(id, where) }] });
+    }),
+  );
+  const field = state.editingComment?.where === where ? container.querySelector(".edit-text") : null;
+  if (!field) return false;
+  attachPicker(field);
+  field.addEventListener("input", () => {
+    if (state.editingComment) state.editingComment.text = field.value;
+  });
+  field.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      saveCommentEdit();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      cancelCommentEdit();
+    }
+  });
+  container.querySelector('[data-edit="cancel"]').addEventListener("click", cancelCommentEdit);
+  container.querySelector('[data-edit="save"]').addEventListener("click", () => saveCommentEdit());
+  if (caret !== null || state.editingComment.focus) {
+    const at = caret ?? field.value.length;
+    state.editingComment.focus = false;
+    field.focus();
+    field.setSelectionRange(at, at);
+  }
+  return true;
+}
+
+function findMessage(id) {
+  return withPending(state.data?.notes ?? []).find((entry) => entry.id === id) ?? state.overlay?.comments.find((entry) => entry.id === id) ?? null;
+}
+
+function rerenderMessages(where) {
+  if (where === "note" && state.note?.root) renderNote($("#note-text")?.value ?? "");
+  if (where === "side" && state.overlay) renderSide();
+}
+
+function startCommentEdit(id, where) {
+  const message = findMessage(id);
+  if (!message || !canEditComment(message)) return;
+  const before = state.editingComment?.where;
+  state.editingComment = { id, where, text: message.text, focus: true };
+  if (before && before !== where) rerenderMessages(before);
+  rerenderMessages(where);
+}
+
+function cancelCommentEdit() {
+  const where = state.editingComment?.where;
+  state.editingComment = null;
+  rerenderMessages(where);
+}
+
+function applyCommentEdit(id, { text, edited }) {
+  const lists = [state.data?.notes, state.overlay?.comments, [...pendingComments.values()]];
+  for (const entry of lists.flatMap((list) => (list ?? []).filter((item) => item.id === id))) {
+    entry.text = text;
+    if (edited) entry.edited = edited;
+    else delete entry.edited;
+  }
+}
+
+async function saveCommentEdit(id = state.editingComment?.id, text = state.editingComment?.text) {
+  const where = state.editingComment?.id === id ? state.editingComment.where : null;
+  const message = id ? findMessage(id) : null;
+  const next = String(text ?? "").trim();
+  if (!next && message) return;
+  if (where) state.editingComment = null;
+  if (!message || next === message.text) return rerenderMessages(where);
+  const before = { text: message.text, edited: message.edited };
+  applyCommentEdit(id, { text: next, edited: new Date().toISOString() });
+  rerenderMessages(where);
+  rerenderComments();
+  try {
+    const saved = await patch(`${BASE}/api/comments/${encodeURIComponent(id)}`, { text: next });
+    applyCommentEdit(id, { text: saved.text, edited: saved.edited });
+  } catch (error) {
+    applyCommentEdit(id, before);
+    toast(t("Couldn't save the edit: {error}", { error: error.message }), { label: t("Try again"), run: () => saveCommentEdit(id, next) });
+  }
+  rerenderComments();
 }
 
 async function openOverlay(screenId, version) {
@@ -2010,6 +2304,8 @@ function closeOverlay() {
   if (!editing.leave()) return;
   inspector.setOn(false);
   closeExportMenu();
+  closeMentionPicker();
+  if (state.editingComment?.where === "side") state.editingComment = null;
   state.overlay = null;
   $("#overlay").hidden = true;
   editing.renderBar();
@@ -2450,6 +2746,8 @@ function postToFrames(message) {
 function renderSide() {
   const overlay = state.overlay;
   const side = $("#ov-side");
+  closeMentionPicker();
+  const editCaret = caretIn(side);
   const all = threadsOf(splitAnnotations(withPending(overlay.comments, overlay.screenId)).comments);
   const threads = all.filter((thread) => !thread.root.resolved);
   const closed = all.filter((thread) => thread.root.resolved);
@@ -2474,15 +2772,7 @@ function renderSide() {
           <div class="thread-head">${thread.root.el ? `<span class="anchor">${escapeHtml(thread.root.el)}</span>` : `<span class="anchor">${t("whole screen")}</span>`}${
             shared || thread.root.pending ? "" : `<button type="button" class="icon-btn" data-action="resolve" title="${t("Resolve thread")}" aria-label="${t("Resolve thread")}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>`
           }</div>
-          ${thread.messages
-            .map(
-              (message) => `<div class="msg${message.pending ? " pending" : ""}"><span class="avatar ${message.kind === "agent" ? "agent" : ""}">${escapeHtml(initials(message.author))}</span><div class="bd"><div class="nm">${escapeHtml(
-                message.author,
-              )}${authorTag(message)}<span class="t">${messageTime(message)}${
-                message.version ? ` · v${message.version}` : ""
-              }</span></div>${withMentions(message.text)}</div></div>`,
-            )
-            .join("")}
+          ${thread.messages.map((message) => messageHtml(message, "side", message.version ? ` · v${message.version}` : "")).join("")}
           ${thread.waiting ? `<div class="waiting-line"><i class="dot" style="background:var(--agent)"></i>${t("waiting for a chat to reply")}</div>` : ""}
           <form class="reply"><input placeholder="${t("Reply")}" required><button class="btn sm">${t("Send")}</button></form>
         </div>`,
@@ -2495,13 +2785,7 @@ function renderSide() {
             .map(
               (thread) => `<div class="thread resolved" data-root="${thread.root.id}">
           <div class="thread-head">${thread.root.el ? `<span class="anchor">${escapeHtml(thread.root.el)}</span>` : `<span class="anchor">${t("whole screen")}</span>`}<span class="muted resolved-by">${t("resolved by {name}", { name: escapeHtml(thread.root.resolved.by ?? t("someone")) })}</span>${shared ? "" : `<button type="button" class="btn sm" data-action="reopen">${t("Reopen")}</button>`}</div>
-          ${thread.messages
-            .map(
-              (message) => `<div class="msg"><span class="avatar ${message.kind === "agent" ? "agent" : ""}">${escapeHtml(initials(message.author))}</span><div class="bd"><div class="nm">${escapeHtml(
-                message.author,
-              )}${authorTag(message)}<span class="t">${messageTime(message)}</span></div>${withMentions(message.text)}</div></div>`,
-            )
-            .join("")}
+          ${thread.messages.map((message) => messageHtml(message, "side")).join("")}
         </div>`,
             )
             .join("")}</details>`
@@ -2514,12 +2798,15 @@ function renderSide() {
           .map((name) => `<option value="${escapeHtml(name)}" ${name === overlay.focusEl ? "selected" : ""}>${escapeHtml(name)}</option>`)
           .join("")}
       </select></label><div class="grow"></div></div>
-      <textarea id="composer-text" placeholder="${t("Write, and tag @{handle} to call the open chat", { handle: HANDLE })}" required></textarea>
+      <textarea id="composer-text" placeholder="${shared ? t("Write a comment") : t("Write a comment. @ tags a person or @{handle} asks the chat", { handle: HANDLE })}" required></textarea>
       <div class="row end"><button class="btn primary sm">${t("Comment")}</button></div>
     </form>`;
   side.querySelectorAll('.thread [data-action="resolve"]').forEach((button) => button.addEventListener("click", () => resolveThread(button.closest(".thread").dataset.root)));
   side.querySelectorAll('.thread [data-action="reopen"]').forEach((button) => button.addEventListener("click", () => resolveThread(button.closest(".thread").dataset.root, true)));
   side.querySelector(".resolved-group")?.addEventListener("toggle", (event) => (overlay.showResolved = event.target.open));
+  side.querySelectorAll(".thread form.reply input").forEach(attachPicker);
+  attachPicker($("#composer-text"));
+  bindMessages(side, "side", editCaret);
   side.querySelectorAll(".thread form.reply").forEach((form) =>
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -2542,7 +2829,7 @@ function renderSide() {
     if (!text) return;
     const sent = await sendComment({ screen: overlay.screenId, el: overlay.focusEl, version: overlay.version, text });
     if (!sent) return;
-    if (/@[a-z]/i.test(text)) toast(t("Sent. It reaches whichever chat is listening."));
+    if (chatHandlesIn(text, state.people).length) toast(t("Sent. It reaches whichever chat is listening."));
     overlay.commenting = false;
     $("#ov-comment").classList.remove("on");
     $("#ov-comment").textContent = t("Comment");
@@ -2595,7 +2882,7 @@ async function refresh(force = false) {
   state.data = data;
   render();
   if (kitChanged && state.side === "components") components.invalidate();
-  if (state.note?.root && !$("#note-text")?.value) renderNote();
+  if (state.note?.root && !$("#note-text")?.value && state.editingComment?.where !== "note") renderNote();
   if (state.overlay) {
     await loadOverlayComments();
     renderSide();
@@ -3040,11 +3327,14 @@ window.addEventListener("resize", () => {
 });
 
 applyTheme(storageGet("screenbook.theme") ?? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+watchPhotos(document);
 const me = await api(`${BASE}/api/me`).catch(() => ({}));
 signedIn = me.user ?? null;
 shared = me.share ?? null;
+localMode = !me.auth && !shared;
 document.body.classList.toggle("shared", Boolean(shared));
 renderMe();
+loadPeople();
 tabs.start();
 await refresh(true);
 const focusProposal = shared?.proposal ?? new URLSearchParams(location.search).get("proposal");
