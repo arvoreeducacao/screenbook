@@ -422,7 +422,7 @@ function frameElement(item, x, y) {
   attachShot(item, entry, box);
   element.addEventListener("click", (event) => {
     event.stopPropagation();
-    if (phone() && moved) return;
+    if (moved) return;
     if (state.tool === "comment") return startDraft(item, box, event);
     if (state.tool === "edit" && !frozen(item)) return openEditor(item.screen.id, item.version, []);
     if (phone()) return openOverlay(item.screen.id, item.version);
@@ -855,7 +855,7 @@ function pointIn(box, event) {
 function hoverPiece(item, box, event) {
   const layer = box.parentElement.querySelector(".pins");
   layer.querySelectorAll(".piece-hl.hover").forEach((mark) => mark.remove());
-  if (state.tool !== "comment" || !event) return;
+  if (state.tool !== "comment" || !event || spaceHeld) return;
   const key = `${item.screen.id}/v${item.version}`;
   if (!(key in state.boxes)) return loadBoxes(item.screen.id, item.version);
   const name = pieceAt(item, pointIn(box, event));
@@ -2773,8 +2773,63 @@ function pinchOf() {
   return { distance: Math.hypot(first.x - second.x, first.y - second.y), x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
 }
 
+let spaceHeld = false;
+let spacePanned = false;
+
+function holdSpace(held) {
+  spaceHeld = held;
+  viewport.classList.toggle("space-pan", held);
+  if (held) world.querySelectorAll(".piece-hl.hover").forEach((mark) => mark.remove());
+}
+
+function typingIn(target) {
+  return Boolean(target.closest?.("input, textarea, select, [contenteditable='true'], [contenteditable='plaintext-only']"));
+}
+
+document.addEventListener("keydown", (event) => {
+  if (event.code !== "Space" || event.metaKey || event.ctrlKey || event.altKey) return;
+  if (state.overlay || state.editor || presenter.playing || typingIn(event.target)) return;
+  event.preventDefault();
+  if (!spaceHeld) holdSpace(true);
+});
+document.addEventListener("keyup", (event) => {
+  if (event.code !== "Space" || !spaceHeld) return;
+  if (!typingIn(event.target)) event.preventDefault();
+  holdSpace(false);
+});
+window.addEventListener("blur", () => spaceHeld && holdSpace(false));
+
+viewport.addEventListener(
+  "pointerdown",
+  (event) => {
+    spacePanned = false;
+    moved = false;
+    if (!spaceHeld || event.button !== 0) return;
+    event.stopPropagation();
+    event.preventDefault();
+    spacePanned = true;
+    startDrag(event);
+  },
+  true,
+);
+for (const type of ["click", "dblclick"]) {
+  viewport.addEventListener(
+    type,
+    (event) => {
+      if (!spaceHeld && !spacePanned) return;
+      event.stopPropagation();
+      event.preventDefault();
+    },
+    true,
+  );
+}
+
 viewport.addEventListener("pointerdown", (event) => {
-  if (event.button !== 0) return;
+  if (event.button !== 0 || spaceHeld) return;
+  startDrag(event);
+});
+
+function startDrag(event) {
   pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
   if (pointers.size === 2) {
     pinch = pinchOf();
@@ -2786,7 +2841,7 @@ viewport.addEventListener("pointerdown", (event) => {
   lastX = event.clientX;
   lastY = event.clientY;
   viewport.classList.add("dragging");
-});
+}
 window.addEventListener("pointermove", (event) => {
   if (!dragging) return;
   if (pointers.has(event.pointerId)) pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
