@@ -14,6 +14,7 @@ import { createTabs } from "./tabs.js";
 import { createLayers } from "./layers.js";
 import { createComponents, partsStamp } from "./components.js";
 import { SHOT_SCALE } from "./shot.js";
+import { createCardFrames } from "./card-frames.js";
 import { createZoom, wheelZoomFactor } from "./zoom.js";
 import { createPalette } from "./palette.js";
 import { createStickies } from "./stickies.js";
@@ -654,6 +655,7 @@ function renderFlow() {
 }
 
 function render() {
+  cardFrames.park();
   const { project, screens, proposals, waiting } = state.data;
   $("#project-name").textContent = project.name;
   document.title = `${project.name} · Screenbook`;
@@ -693,6 +695,7 @@ function render() {
     state.fitted = true;
     fit();
   }
+  cardFrames.adopt();
   live?.rerender();
 }
 
@@ -976,6 +979,7 @@ function setTool(tool) {
   if (tool === "comment") deselect();
   state.commentsPanel.open = tool === "comment";
   renderCommentsPanel();
+  cardFrames.update();
 }
 
 const SEARCH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>';
@@ -1268,10 +1272,14 @@ async function submitNote(event) {
 }
 
 const probes = new Map();
+const openingProbes = new Map();
+const probeQueue = [];
+const PROBE_SLOTS = 2;
+const PROBE_IDLE_MS = 1500;
+let probesOpen = 0;
 
-function probeFrame(screen, version) {
+function openProbe(screen, version) {
   const key = `${screen}/v${version}`;
-  if (probes.has(key)) return probes.get(key);
   const entry = versionEntry(screenById(screen), version);
   const frame = document.createElement("iframe");
   frame.className = "probe";
@@ -1279,25 +1287,69 @@ function probeFrame(screen, version) {
   frame.setAttribute("aria-hidden", "true");
   frame.style.width = `${entry?.width ?? 1280}px`;
   frame.style.height = `${entry?.height ?? 800}px`;
-  const probe = { frame, waiters: new Map() };
+  const probe = { key, frame, waiters: new Map(), asking: 0, idle: 0 };
   probe.ready = new Promise((resolve) => (probe.markReady = resolve));
   frame.src = frameUrl(screen, version);
   document.body.appendChild(frame);
   probes.set(key, probe);
+  probesOpen++;
   return probe;
 }
 
+function probeFrame(screen, version) {
+  const key = `${screen}/v${version}`;
+  const known = probes.get(key);
+  if (known) {
+    clearTimeout(known.idle);
+    return Promise.resolve(known);
+  }
+  if (!openingProbes.has(key)) {
+    openingProbes.set(
+      key,
+      new Promise((resolve) => {
+        const start = () => {
+          openingProbes.delete(key);
+          resolve(openProbe(screen, version));
+        };
+        if (probesOpen < PROBE_SLOTS) start();
+        else probeQueue.push(start);
+      }),
+    );
+  }
+  return openingProbes.get(key);
+}
+
+function closeProbeLater(probe) {
+  clearTimeout(probe.idle);
+  probe.idle = setTimeout(() => {
+    if (probe.asking) return;
+    probe.frame.remove();
+    probes.delete(probe.key);
+    probesOpen--;
+    probeQueue.shift()?.();
+  }, probeQueue.length ? 0 : PROBE_IDLE_MS);
+}
+
 function askProbe(screen, version, message, timeout = 2500) {
-  const probe = probeFrame(screen, version);
+  return cardFrames.ask(screen, version, message, timeout) ?? askMeasurer(screen, version, message, timeout);
+}
+
+async function askMeasurer(screen, version, message, timeout) {
+  const probe = await probeFrame(screen, version);
+  const id = Math.random().toString(36).slice(2);
+  probe.asking++;
   const asked = probe.ready.then(
     () =>
       new Promise((resolve) => {
-        const id = Math.random().toString(36).slice(2);
         probe.waiters.set(id, resolve);
         probe.frame.contentWindow?.postMessage({ ...message, id }, "*");
       }),
   );
-  return Promise.race([asked, new Promise((resolve) => setTimeout(() => resolve(null), timeout))]);
+  const answer = await Promise.race([asked, new Promise((resolve) => setTimeout(() => resolve(null), timeout))]);
+  probe.waiters.delete(id);
+  probe.asking--;
+  closeProbeLater(probe);
+  return answer;
 }
 
 window.addEventListener("message", (event) => {
@@ -1853,6 +1905,7 @@ function applyTransform() {
   zoom.update();
   board?.onTransform();
   scheduleSharpen();
+  cardFrames.update();
 }
 
 function fit() {
@@ -2928,6 +2981,43 @@ async function refresh(force = false) {
 
 let live = null;
 
+const cardBoxes = new WeakMap();
+
+function cardBoxOf(element) {
+  if (!cardBoxes.has(element)) cardBoxes.set(element, element.querySelector(".box"));
+  return cardBoxes.get(element);
+}
+
+function cardFrameCards() {
+  return state.placed.map((placed) => {
+    const { item } = placed;
+    const entry = versionEntry(item.screen, item.version);
+    const stamp = partsStamp(state, item.screen, item.version);
+    return {
+      key: `${item.screen.id}/v${item.version}${stamp ? `@${stamp}` : ""}`,
+      screen: item.screen.id,
+      version: item.version,
+      box: cardBoxOf(placed.element),
+      left: state.tx + placed.x * state.scale,
+      top: state.ty + placed.y * state.scale,
+      width: placed.width * state.scale,
+      height: placed.height * state.scale,
+      boxWidth: FRAME_WIDTH,
+      screenWidth: entry.width,
+      screenHeight: entry.height,
+    };
+  });
+}
+
+const cardFrames = createCardFrames({
+  frameUrl,
+  cards: cardFrameCards,
+  view: () => ({ width: viewport.clientWidth, height: viewport.clientHeight }),
+  scale: () => state.scale,
+  translation: () => ({ x: state.tx, y: state.ty }),
+  commenting: () => state.tool === "comment" && !handHeld(),
+});
+
 const tabs = createTabs({
   base: BASE,
   state,
@@ -3254,6 +3344,17 @@ viewport.addEventListener(
   },
   { passive: false },
 );
+
+viewport.addEventListener(
+  "pointermove",
+  (event) => {
+    if (state.tool !== "comment") return;
+    const area = viewport.getBoundingClientRect();
+    cardFrames.point({ x: event.clientX - area.left, y: event.clientY - area.top });
+  },
+  { passive: true },
+);
+viewport.addEventListener("pointerleave", () => cardFrames.point(null));
 
 $("#zoom-in").addEventListener("click", () => zoomAt(1.25));
 $("#zoom-out").addEventListener("click", () => zoomAt(0.8));
