@@ -5,6 +5,7 @@ export const DROP_SCALE = 0.7;
 export const RING_GRACE_MS = 2000;
 export const FAST_PAN = 1.5;
 export const LOAD_STALL_MS = 3000;
+export const LOAD_RETRIES = 3;
 
 const RING_MARGIN = 0.2;
 const LOOKAHEAD_MS = 400;
@@ -123,7 +124,7 @@ export function createCardFrames({ frameUrl, cards, view, scale, translation, co
     iframe.style.height = `${card.screenHeight}px`;
     iframe.style.transform = `scale(${card.boxWidth / card.screenWidth})`;
     holder.appendChild(iframe);
-    const frame = { key: card.key, screen: card.screen, version: card.version, holder, iframe, box: null, state: "warm", ready: false, outsideSince: null, openedAt: clock(), waiters: new Map() };
+    const frame = { key: card.key, screen: card.screen, version: card.version, holder, iframe, box: null, state: "warm", ready: false, answered: false, attempts: 0, outsideSince: null, openedAt: clock(), waiters: new Map() };
     iframe.src = frameUrl(card.screen, card.version);
     frames.set(card.key, frame);
     return frame;
@@ -147,6 +148,15 @@ export function createCardFrames({ frameUrl, cards, view, scale, translation, co
       frame.holder.remove();
       if (box && ![...frames.values()].some((other) => other.box === box)) box.classList.remove("has-code");
     }, SWAP_MS);
+  }
+
+  function retryFailed(now) {
+    for (const frame of frames.values()) {
+      if (frame.answered || frame.attempts >= LOAD_RETRIES || now - frame.openedAt < LOAD_STALL_MS) continue;
+      frame.attempts++;
+      frame.openedAt = now;
+      frame.iframe.src = frameUrl(frame.screen, frame.version);
+    }
   }
 
   function show(frame) {
@@ -173,6 +183,7 @@ export function createCardFrames({ frameUrl, cards, view, scale, translation, co
       place(frame, card.box);
       show(frame);
     }
+    retryFailed(now);
     if (Math.hypot(velocity.x, velocity.y) > 0.01) schedule();
     else wakeAtNextDeadline(now);
   }
@@ -183,7 +194,7 @@ export function createCardFrames({ frameUrl, cards, view, scale, translation, co
       frame.outsideSince === null ? Infinity : frame.outsideSince + RING_GRACE_MS,
       frame.ready ? Infinity : frame.openedAt + LOAD_STALL_MS,
     ]);
-    const next = Math.min(...due);
+    const next = Math.min(...due.filter((at) => at > now));
     if (Number.isFinite(next)) deadline = setTimeout(schedule, Math.max(0, next - now) + 16);
   }
 
@@ -200,7 +211,10 @@ export function createCardFrames({ frameUrl, cards, view, scale, translation, co
     const frame = frameOf(event.source);
     if (!frame) return;
     const data = event.data ?? {};
-    if (data.type === "ready") frame.iframe.contentWindow?.postMessage({ type: "settle" }, "*");
+    if (data.type === "ready") {
+      frame.answered = true;
+      frame.iframe.contentWindow?.postMessage({ type: "settle" }, "*");
+    }
     if (data.type === "settled") {
       frame.ready = true;
       show(frame);
