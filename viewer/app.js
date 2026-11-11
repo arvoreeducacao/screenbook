@@ -47,6 +47,8 @@ const WHEEL_GLIDE_MS = 50;
 const WHEEL_SETTLED = 0.002;
 const BASE = document.querySelector('meta[name="screenbook-base"]')?.content ?? "";
 const HANDLE = (new URLSearchParams(location.search).get("handle") ?? "claude").toLowerCase();
+const SEEN_MENTIONS_KEY = `screenbook.seen-mentions:${BASE}`;
+const SEEN_MENTIONS_KEPT = 500;
 
 const SUN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
 const MOON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
@@ -656,12 +658,10 @@ function renderFlow() {
 
 function render() {
   cardFrames.park();
-  const { project, screens, proposals, waiting } = state.data;
+  const { project, screens, proposals } = state.data;
   $("#project-name").textContent = project.name;
   document.title = `${project.name} · Screenbook`;
-  const waitingElement = $("#waiting");
-  waitingElement.hidden = !waiting.length;
-  waitingElement.textContent = t(waiting.length === 1 ? "{n} mention waiting for a chat" : "{n} mentions waiting for a chat", { n: waiting.length });
+  renderWaiting();
   renderAnnotationToggle();
   renderDeviceFilter();
   $("#empty").hidden = screens.length > 0;
@@ -1135,8 +1135,63 @@ function startDraft(item, box, event) {
   loadBoxes(item.screen.id, item.version);
 }
 
+function seenMentions() {
+  try {
+    return new Set(JSON.parse(storageGet(SEEN_MENTIONS_KEY) ?? "[]"));
+  } catch {
+    return new Set();
+  }
+}
+
+function rootOfComment(id) {
+  return state.data?.notes?.find((note) => note.id === id)?.replyTo ?? id;
+}
+
+function unseenMentions() {
+  const seen = seenMentions();
+  const me = myName();
+  return (state.data?.waiting ?? []).filter((mention) => !seen.has(mention.comment) && mention.author !== me);
+}
+
+function renderWaiting() {
+  const unseen = unseenMentions();
+  const element = $("#waiting");
+  element.hidden = !unseen.length;
+  element.textContent = t(unseen.length === 1 ? "{n} mention waiting for a chat" : "{n} mentions waiting for a chat", { n: unseen.length });
+}
+
+function markMentionsSeen(rootIds) {
+  const roots = new Set(rootIds);
+  const seen = seenMentions();
+  const fresh = (state.data?.waiting ?? []).filter((mention) => !seen.has(mention.comment) && roots.has(rootOfComment(mention.comment)));
+  if (!fresh.length) return;
+  storageSet(SEEN_MENTIONS_KEY, JSON.stringify([...seen, ...fresh.map((mention) => mention.comment)].slice(-SEEN_MENTIONS_KEPT)));
+  renderWaiting();
+}
+
+async function openMention(mention) {
+  const rootId = rootOfComment(mention.comment);
+  const root = state.data.notes.find((note) => note.id === rootId);
+  const screen = screenById(mention.screen);
+  if (!root || !screen) return markMentionsSeen([rootId]);
+  if (state.overlay) closeOverlay();
+  tabs.showFor(screen.section ?? null);
+  const placed = placedFor(root);
+  if (placed) {
+    zoomTo({ left: placed.x - 60, top: placed.y - 110, right: placed.x + (placed.reach ?? placed.width) + 60, bottom: placed.y + placed.height + 60 });
+    openThread(rootId);
+    return;
+  }
+  await openOverlay(screen.id, root.version ?? mention.version);
+  if (!state.overlay) return;
+  setPanel("talk");
+  renderSide();
+  $(`#ov-side .thread[data-root="${CSS.escape(rootId)}"]`)?.scrollIntoView({ block: "nearest" });
+}
+
 function openThread(rootId) {
   state.note = { root: rootId };
+  markMentionsSeen([rootId]);
   renderPins();
   renderNote();
 }
@@ -2841,6 +2896,7 @@ function renderSide() {
   const all = threadsOf(splitAnnotations(withPending(overlay.comments, overlay.screenId)).comments);
   const threads = all.filter((thread) => !thread.root.resolved);
   const closed = all.filter((thread) => thread.root.resolved);
+  if (overlay.panel === "talk") markMentionsSeen(threads.map((thread) => thread.root.id));
   const notes = state.showAnnotations ? annotationThreads(overlay.comments) : [];
   side.innerHTML = `
     <div class="head"><b>${t("Conversation")}</b><span class="tag plain">${threads.length}</span></div>
@@ -3576,5 +3632,9 @@ function openFromHash() {
   openOverlay(screen.id, version);
 }
 window.addEventListener("hashchange", openFromHash);
+$("#waiting").addEventListener("click", () => {
+  const next = unseenMentions()[0];
+  if (next) openMention(next);
+});
 openFromHash();
 setInterval(() => refresh().catch(() => {}), POLL_MS);

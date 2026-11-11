@@ -17,6 +17,7 @@ export default {
   "{n} lines": "{n} linhas",
   "{n} mention waiting for a chat": "{n} menção esperando um chat",
   "{n} mentions waiting for a chat": "{n} menções esperando um chat",
+  "Open the next mention": "Abrir a próxima menção",
   "{n} min ago": "há {n} min",
   "{n} of {total}": "{n} de {total}",
   "{n} official screen": "{n} tela oficial",
