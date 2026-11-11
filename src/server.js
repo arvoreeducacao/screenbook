@@ -128,6 +128,7 @@ const BRIDGE = `<script>
       if (picked.length) parent.postMessage({ type: "edit-info", info: describe(picked[0]) }, "*");
     }
     if (data.type === "pins") drawPins(data.pins || []);
+    if (data.type === "settle") settle(data.id);
     if (data.type === "probe") {
       var hit = document.elementFromPoint(data.x * innerWidth, data.y * innerHeight);
       var piece = hit && hit.closest("[data-el]");
@@ -151,6 +152,19 @@ const BRIDGE = `<script>
     var target = event.target.closest("[data-el]");
     parent.postMessage({ type: "pick", el: target ? target.getAttribute("data-el") : null }, "*");
   }, true);
+  function nextFrame() {
+    return new Promise(function (resolve) { requestAnimationFrame(function () { resolve(); }); });
+  }
+  function loaded() {
+    if (document.readyState === "complete") return Promise.resolve();
+    return new Promise(function (resolve) { addEventListener("load", function () { resolve(); }, { once: true }); });
+  }
+  function settle(id) {
+    var fonts = function () { return document.fonts ? document.fonts.ready : null; };
+    loaded().then(nextFrame).then(fonts).then(nextFrame, nextFrame).then(nextFrame).then(function () {
+      parent.postMessage({ type: "settled", id: id }, "*");
+    });
+  }
   function drawPins(pins) {
     var old = document.getElementById("__screenbook_pins");
     if (old) old.remove();
@@ -210,6 +224,7 @@ for (const file of ["ui.css", "shell.js", "devmode.css", "home.css", "home.js", 
 STATIC_FILES.add("flow.js");
 STATIC_FILES.add("mentions.js");
 STATIC_FILES.add("shot.js");
+STATIC_FILES.add("card-frames.js");
 
 function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
