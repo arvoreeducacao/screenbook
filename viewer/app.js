@@ -391,6 +391,7 @@ function attachShot(item, entry, box) {
   image.alt = item.screen.name;
   image.loading = "lazy";
   image.className = "shot-img";
+  image.draggable = false;
   image.addEventListener("load", () => reveal(image), { once: true });
   const source = `${BASE}/api/screens/${item.screen.id}/v${item.version}.thumb.webp${stamp ? `?p=${stamp}` : ""}`;
   let tries = 0;
@@ -897,7 +898,7 @@ function pointIn(box, event) {
 function hoverPiece(item, box, event) {
   const layer = box.parentElement.querySelector(".pins");
   layer.querySelectorAll(".piece-hl.hover").forEach((mark) => mark.remove());
-  if (state.tool !== "comment" || !event || spaceHeld) return;
+  if (state.tool !== "comment" || !event || handHeld()) return;
   const key = `${item.screen.id}/v${item.version}`;
   if (!(key in state.boxes)) return loadBoxes(item.screen.id, item.version);
   const name = pieceAt(item, pointIn(box, event));
@@ -3096,12 +3097,26 @@ function pinchOf() {
 }
 
 let spaceHeld = false;
-let spacePanned = false;
+let middleHeld = false;
+let handPanned = false;
+
+function handHeld() {
+  return spaceHeld || middleHeld;
+}
+
+function showHand() {
+  viewport.classList.toggle("hand-pan", handHeld());
+  if (handHeld()) world.querySelectorAll(".piece-hl.hover").forEach((mark) => mark.remove());
+}
 
 function holdSpace(held) {
   spaceHeld = held;
-  viewport.classList.toggle("space-pan", held);
-  if (held) world.querySelectorAll(".piece-hl.hover").forEach((mark) => mark.remove());
+  showHand();
+}
+
+function holdMiddle(held) {
+  middleHeld = held;
+  showHand();
 }
 
 function typingIn(target) {
@@ -3119,26 +3134,31 @@ document.addEventListener("keyup", (event) => {
   if (!typingIn(event.target)) event.preventDefault();
   holdSpace(false);
 });
-window.addEventListener("blur", () => spaceHeld && holdSpace(false));
+window.addEventListener("blur", () => {
+  if (spaceHeld) holdSpace(false);
+  if (middleHeld) holdMiddle(false);
+});
 
 viewport.addEventListener(
   "pointerdown",
   (event) => {
-    spacePanned = false;
+    handPanned = false;
     moved = false;
-    if (!spaceHeld || event.button !== 0) return;
+    const middle = event.button === 1;
+    if (!middle && !(spaceHeld && event.button === 0)) return;
     event.stopPropagation();
     event.preventDefault();
-    spacePanned = true;
+    handPanned = true;
+    if (middle) holdMiddle(true);
     startDrag(event);
   },
   true,
 );
-for (const type of ["click", "dblclick"]) {
+for (const type of ["click", "dblclick", "auxclick"]) {
   viewport.addEventListener(
     type,
     (event) => {
-      if (!spaceHeld && !spacePanned) return;
+      if (!spaceHeld && !handPanned) return;
       event.stopPropagation();
       event.preventDefault();
     },
@@ -3199,14 +3219,16 @@ function releasePointer(event) {
   return false;
 }
 window.addEventListener("pointercancel", (event) => {
+  if (middleHeld) holdMiddle(false);
   if (releasePointer(event)) return;
   dragging = false;
   viewport.classList.remove("dragging");
 });
 window.addEventListener("pointerup", (event) => {
+  if (event.button === 1 && middleHeld) holdMiddle(false);
   if (releasePointer(event)) return;
   if (event.button === 0 && !event.target.closest?.("#frame-menu")) closeFrameMenu();
-  if (dragging && !moved && event.target === viewport) {
+  if (dragging && !moved && !handPanned && event.target === viewport) {
     deselect();
     closeNote();
     if (state.annotation) {

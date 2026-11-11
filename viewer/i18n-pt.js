@@ -367,6 +367,7 @@ export default {
   "Measuring": "Medindo",
   "Medium": "Médio",
   "Mention you": "Marcam você",
+  "Middle button + drag": "Botão do meio + arrastar",
   "Minimap": "Minimapa",
   "Mod + scroll": "Mod + rolar",
   "Model": "Modelo",
