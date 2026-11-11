@@ -1,5 +1,6 @@
 import { escapeHtml } from "./menu.js";
 import { t } from "./i18n.js";
+import { shotStampOf } from "./shot.js";
 
 const DIAMOND = '<i class="cp-dia" aria-hidden="true"></i>';
 
@@ -22,8 +23,7 @@ export function shownParts(state, screen, version) {
 }
 
 export function partsStamp(state, screen, version) {
-  const shown = shownParts(state, screen, version);
-  return shown ? Object.entries(shown).map(([name, v]) => `${name}.${v}`).join("-") : "";
+  return shotStampOf(shownParts(state, screen, version));
 }
 
 export function createComponents({ base, state, list, api, post, ensureName, toast, refresh, openScreen, askAi }) {

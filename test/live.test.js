@@ -127,7 +127,7 @@ test("a cursor from someone not connected is refused", async () => {
 test("what the agent does in the MCP reaches the open canvases", async () => {
   const watcher = await connect("cai-tab-1", "Cai");
   await watcher.next("snapshot");
-  const tools = buildTools(book, { render: async () => Buffer.from("png") });
+  const tools = buildTools(book, { render: async () => ({ png: Buffer.from("png") }) });
   await tools.write_screen.run({ proposal: "p", name: "List", section: "Deals", html: "<p data-el='row'>a</p>" });
   const drew = await watcher.next("agents", (agents) => agents.some((agent) => agent.action === "drew"));
   assert.deepEqual(
@@ -141,7 +141,7 @@ test("a chat that talks to the viewer shows up at once, one marker per chat even
   await watcher.next("snapshot");
   const first = presenceSender({ viewer: base, handle: "claude", session: "chat-one" });
   const second = presenceSender({ viewer: base, handle: "claude", session: "chat-two" });
-  const tools = buildTools(book, { render: async () => Buffer.from("png"), presence: (activity) => first(null, activity) });
+  const tools = buildTools(book, { render: async () => ({ png: Buffer.from("png") }), presence: (activity) => first(null, activity) });
   await tools.write_screen.run({ proposal: "p", name: "Detail", section: "Deals", html: "<p data-el='row'>b</p>" });
   await second(null, { action: "reading", screen: "list", version: 1 });
   const agents = await watcher.next("agents", (list) => list.some((agent) => agent.session === "chat-one" && agent.action === "drew") && list.some((agent) => agent.session === "chat-two"));
@@ -154,7 +154,7 @@ test("the agent's marker says which piece it measures and where a new screen goe
   const watcher = await connect("cai-tab-3", "Cai");
   await watcher.next("snapshot");
   const send = presenceSender({ viewer: base, handle: "claude", session: "chat-three" });
-  const tools = buildTools(book, { render: async () => Buffer.from("png"), read: async () => ({}), presence: (activity) => send(null, activity) });
+  const tools = buildTools(book, { render: async () => ({ png: Buffer.from("png") }), read: async () => ({}), presence: (activity) => send(null, activity) });
   await tools.inspect_screen.run({ screen: "list", el: "row" });
   const measuring = await watcher.next("agents", (list) => list.some((agent) => agent.session === "chat-three" && agent.action === "inspecting"));
   assert.equal(measuring.find((agent) => agent.session === "chat-three").el, "row");

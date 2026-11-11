@@ -20,7 +20,7 @@ const remote = remoteStore(`http://127.0.0.1:${server.address().port}`, { token:
 after(() => server.close());
 
 test("the chat draws through the server, which is the only one writing to the store", async () => {
-  const tools = buildProductTools(remote, { render: async () => Buffer.from("png") });
+  const tools = buildProductTools(remote, { render: async () => ({ png: Buffer.from("png") }) });
   const listing = JSON.parse((await tools.open_project.run({})).content[0].text);
   assert.deepEqual(listing.products.map((item) => item.id), ["crm"]);
   const written = JSON.parse((await tools.write_screen.run({ product: "crm", proposal: "p", name: "Deal", section: "Deals", html: "<p data-el='x'>a</p>" })).content[0].text);
@@ -30,7 +30,7 @@ test("the chat draws through the server, which is the only one writing to the st
 });
 
 test("many writes at once over the server all land", async () => {
-  const tools = buildProductTools(remote, { render: async () => Buffer.from("png") });
+  const tools = buildProductTools(remote, { render: async () => ({ png: Buffer.from("png") }) });
   await Promise.all(
     Array.from({ length: 12 }, (_, index) =>
       tools.write_screen.run({ product: "crm", proposal: "rush", name: `Screen ${index}`, section: "Deals", html: `<p>${index}</p>` }),

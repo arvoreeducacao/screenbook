@@ -347,7 +347,7 @@ export function createInspector({ frames, current, base, escapeHtml, toast, onEs
   async function exportPiece() {
     const now = current();
     if (!now || !state.info) return;
-    const blob = await cropPng(`${base}/api/screens/${now.screenId}/v${now.version}.png`, state.info.box);
+    const blob = await cropPng(`${base}/api/screens/${now.screenId}/v${now.version}.png`, state.info.box, now.width);
     if (!blob) return toast(t("This version has no picture yet. Ask the chat to take a screenshot of the screen."));
     saveBlob(blob, fileName(now.screenId, now.version, state.info.el ?? state.info.label));
   }

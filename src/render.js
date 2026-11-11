@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { SHOT_SCALE } from "../viewer/shot.js";
 
 const CHROME_PATHS = [
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -29,15 +30,34 @@ async function browser() {
   return browserPromise;
 }
 
-export async function screenshot(html, { width, height, fullPage = false } = {}) {
-  const page = await (await browser()).newPage({ viewport: { width, height }, deviceScaleFactor: 1 });
+function fontsNotEmbedded() {
+  const generic = new Set(["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded", "emoji", "math", "fangsong", "-apple-system", "blinkmacsystemfont"]);
+  const unquote = (name) => name.trim().replace(/^["']|["']$/g, "");
+  const embedded = new Set([...document.fonts].map((face) => unquote(face.family).toLowerCase()));
+  const missing = new Set();
+  for (const node of document.body?.getElementsByTagName("*") ?? []) {
+    if (!(node.offsetWidth || node.offsetHeight)) continue;
+    if (![...node.childNodes].some((child) => child.nodeType === 3 && child.textContent.trim())) continue;
+    const first = unquote(getComputedStyle(node).fontFamily.split(",")[0] ?? "");
+    if (first && !generic.has(first.toLowerCase()) && !embedded.has(first.toLowerCase())) missing.add(first);
+  }
+  return [...missing].slice(0, 12);
+}
+
+export async function capture(html, { width, height, fullPage = false, scale = SHOT_SCALE } = {}) {
+  const page = await (await browser()).newPage({ viewport: { width, height }, deviceScaleFactor: scale });
   try {
     await page.setContent(html, { waitUntil: "load", timeout: 15000 });
     await page.evaluate(() => document.fonts?.ready);
-    return await page.screenshot({ type: "png", fullPage });
+    const fonts = await page.evaluate(fontsNotEmbedded);
+    return { png: await page.screenshot({ type: "png", fullPage }), fontsNotEmbedded: fonts };
   } finally {
     await page.close();
   }
+}
+
+export async function screenshot(html, options) {
+  return (await capture(html, options)).png;
 }
 
 export async function thumbnail(png, { width: target = 640, quality = 0.82 } = {}) {
