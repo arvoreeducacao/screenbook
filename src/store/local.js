@@ -1,8 +1,11 @@
-import { mkdir, readFile, readdir, writeFile, appendFile, stat } from "node:fs/promises";
-import { dirname, join, resolve, relative, sep } from "node:path";
+import { mkdir, readFile, readdir, writeFile, appendFile, rename, stat } from "node:fs/promises";
+import { basename, dirname, join, resolve, relative, sep } from "node:path";
+
+const WRITING = ".writing";
 
 export function localStore(root) {
   const base = resolve(root);
+  let writes = 0;
 
   function full(path) {
     const target = resolve(base, path);
@@ -27,8 +30,11 @@ export function localStore(root) {
 
     async write(path, data) {
       const target = full(path);
+      const pending = join(base, WRITING, `${process.pid}-${++writes}-${basename(target)}`);
       await mkdir(dirname(target), { recursive: true });
-      await writeFile(target, data);
+      await mkdir(dirname(pending), { recursive: true });
+      await writeFile(pending, data);
+      await rename(pending, target);
     },
 
     async append(path, text) {
@@ -49,6 +55,7 @@ export function localStore(root) {
           throw error;
         }
         for (const entry of entries) {
+          if (dir === base && entry.name === WRITING) continue;
           const path = join(dir, entry.name);
           if (entry.isDirectory()) await walk(path);
           else found.push(relative(base, path).split(sep).join("/"));
