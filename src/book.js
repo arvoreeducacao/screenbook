@@ -5,6 +5,12 @@ import { arrange, baseOf } from "../viewer/arrange.js";
 import { homePage, isBoard, pagesOf } from "../viewer/pages.js";
 import { translate } from "../viewer/i18n.js";
 import { emptyBoard, expandOps, nearFilter, summarize } from "../viewer/board-model.js";
+import { SHOT_SCALE, shotStampOf } from "../viewer/shot.js";
+
+function pngWidth(png) {
+  if (!png || png.length < 24 || png.toString("latin1", 12, 16) !== "IHDR") return null;
+  return png.readUInt32BE(16);
+}
 
 export const DESKTOP = { width: 1280, height: 800 };
 export const MOBILE = { width: 375, height: 812 };
@@ -894,17 +900,24 @@ export class Book {
       await this.store.write(`screens/${id}/v${version}.png`, png);
       const meta = await this.readJson(`screens/${id}/meta.json`);
       const entry = meta?.versions.find((item) => item.v === version);
-      if (!entry?.parts) return;
-      entry.shot = await this.shownParts(meta, entry);
+      if (!entry) return;
+      const width = pngWidth(png);
+      if (width && entry.width) entry.shotScale = Math.round(width / entry.width);
+      if (entry.parts) entry.shot = await this.shownParts(meta, entry);
       await this.writeJson(`screens/${id}/meta.json`, meta);
     });
+  }
+
+  async shotIsLowRes(id, version) {
+    const meta = await this.readJson(`screens/${id}/meta.json`);
+    const entry = meta?.versions.find((item) => item.v === version);
+    return Boolean(entry) && (entry.shotScale ?? 1) < SHOT_SCALE;
   }
 
   async shotStamp(id, version) {
     const meta = await this.readJson(`screens/${id}/meta.json`);
     const entry = meta?.versions.find((item) => item.v === version);
-    const shown = await this.shownParts(meta, entry);
-    return shown ? Object.entries(shown).map(([name, v]) => `${name}.${v}`).join("-") : "";
+    return shotStampOf(await this.shownParts(meta, entry));
   }
 
   thumbPath(id, version, stamp) {

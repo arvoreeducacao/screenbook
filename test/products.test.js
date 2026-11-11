@@ -33,7 +33,7 @@ test("the scoped store keeps each product in its folder", async () => {
 });
 
 test("product tools ask for the product, and open_project without one lists them", async () => {
-  const tools = buildProductTools(store, { render: async () => Buffer.from("png") });
+  const tools = buildProductTools(store, { render: async () => ({ png: Buffer.from("png") }) });
   const listing = JSON.parse((await tools.open_project.run({})).content[0].text);
   assert.deepEqual(listing.products.map((item) => item.id), ["crm", "storefront"]);
   const written = await tools.write_screen.run({ product: "storefront", proposal: "p", name: "Home", section: "Customer", html: "<p>hi</p>" });
@@ -113,7 +113,7 @@ test("a product can be created from the viewer and from the chat", async () => {
   assert.equal((await fetch(`${base}/api/products`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Café Acme" }) })).status, 400);
   assert.equal((await fetch(`${base}/api/products`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "api" }) })).status, 400);
 
-  const tools = buildProductTools(store, { render: async () => Buffer.from("png") });
+  const tools = buildProductTools(store, { render: async () => ({ png: Buffer.from("png") }) });
   const created = JSON.parse((await tools.create_project.run({ name: "Brand", head_html: "<style>:root{--ink:#111}</style>" })).content[0].text);
   assert.equal(created.id, "brand");
   const book = new Book(scopedStore(store, "brand"));

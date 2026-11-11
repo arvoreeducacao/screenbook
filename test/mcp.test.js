@@ -18,7 +18,7 @@ async function setup() {
     handle: "claude",
     render: async (html, size) => {
       renders.push({ html, size });
-      return FAKE_PNG;
+      return { png: FAKE_PNG, fontsNotEmbedded: html.includes("Averta") ? ["averta"] : [] };
     },
   });
   return { book, tools, renders };
@@ -73,6 +73,15 @@ test("the guide is the product's memory: written, edited, and fed by what people
   await assert.rejects(book.writeGuide({ text: "x".repeat(13000), by: "alice" }), /under 12000/);
 });
 
+test("write_screen warns when the screen asks for a font it does not load", async () => {
+  const { tools } = await setup();
+  const plain = JSON.parse((await tools.write_screen.run({ proposal: "p", name: "Deal", section: "Deals", html: "<main data-el='card'>x</main>" })).content[0].text);
+  assert.equal(plain.fontsNotEmbedded, undefined);
+  const local = JSON.parse((await tools.write_screen.run({ proposal: "p", name: "Profile", section: "Deals", html: "<main style='font-family:Averta' data-el='card'>x</main>" })).content[0].text);
+  assert.deepEqual(local.fontsNotEmbedded, ["averta"]);
+  assert.match(local.fontWarning, /head_html/);
+});
+
 test("find_screens ranks screens by what they show, and like finds the neighbors of a screen", async () => {
   const { tools } = await setup();
   await tools.write_screen.run({ proposal: "p", name: "Order list", section: "Deals", route: "/deals", html: "<main data-el='filter-status'>Filter by status · Open order</main>" });
@@ -105,7 +114,7 @@ test("inspect_screen measures the composed screen at its size, and big answers a
   const book = new Book(localStore(dir));
   await book.init({ name: "CRM" });
   const calls = [];
-  const tools = buildTools(book, { render: async () => FAKE_PNG, read: async (html, options) => (calls.push({ html, options }), { pieces: Array.from({ length: 4000 }, (_, at) => ({ piece: `p${at}`, text: "x".repeat(20) })) }) });
+  const tools = buildTools(book, { render: async () => ({ png: FAKE_PNG }), read: async (html, options) => (calls.push({ html, options }), { pieces: Array.from({ length: 4000 }, (_, at) => ({ piece: `p${at}`, text: "x".repeat(20) })) }) });
   await tools.write_screen.run({ proposal: "p", name: "A", section: "S", width: 375, height: 700, html: "<main data-el='x'>a</main>" });
   const result = await tools.inspect_screen.run({ screen: "a", el: "x" });
   assert.deepEqual(calls[0].options, { width: 375, height: 700, el: "x" });

@@ -209,6 +209,7 @@ const STATIC_FILES = new Set(["style.css", "app.js", "i18n.js", "i18n-pt.js", "l
 for (const file of ["ui.css", "shell.js", "devmode.css", "home.css", "home.js", "inspect.js", "history.js", "present.js", "export.js", "edit.js", "edit-ops.js", "edit.css"]) STATIC_FILES.add(file);
 STATIC_FILES.add("flow.js");
 STATIC_FILES.add("mentions.js");
+STATIC_FILES.add("shot.js");
 
 function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
@@ -309,13 +310,17 @@ async function sendScreenExport(response, book, id, version) {
 
 let shooting = Promise.resolve();
 
-function reshoot(book, id, version, { missing = false } = {}) {
+async function defaultShot(html, size) {
+  const { screenshot } = await import("./render.js");
+  return screenshot(html, size);
+}
+
+function reshoot(book, id, version, needed, takeShot) {
   const run = shooting.then(async () => {
-    if (missing ? await book.png(id, version) : !(await book.shotIsStale(id, version))) return null;
-    const { screenshot } = await import("./render.js");
+    if (!(await needed())) return null;
     const entry = (await book.screen(id))?.versions.find((item) => item.v === version);
     if (!entry) return null;
-    const png = await screenshot(await book.composedHtml(id, version), { width: entry.width, height: entry.height });
+    const png = await takeShot(await book.composedHtml(id, version), { width: entry.width, height: entry.height });
     await book.savePng(id, version, png);
     return png;
   });
@@ -323,17 +328,34 @@ function reshoot(book, id, version, { missing = false } = {}) {
   return run;
 }
 
+const upgrading = new Set();
+
+function upgradeLater(book, id, version, takeShot) {
+  const key = `${book.store.describe()}|${id}/v${version}`;
+  if (upgrading.has(key)) return;
+  upgrading.add(key);
+  reshoot(book, id, version, () => book.shotIsLowRes(id, version), takeShot)
+    .catch(() => null)
+    .finally(() => upgrading.delete(key));
+}
+
 const FOREVER = "private, max-age=31536000, immutable";
 
-async function freshPng(book, id, version) {
+async function freshPng(book, id, version, takeShot) {
   const png = await book.png(id, version);
   if (!png) {
-    const shot = await reshoot(book, id, version, { missing: true }).catch(() => null);
+    const shot = await reshoot(book, id, version, async () => !(await book.png(id, version)), takeShot).catch(() => null);
     return { png: shot ?? (await book.png(id, version)), fresh: true };
   }
-  if (!(await book.shotIsStale(id, version).catch(() => false))) return { png, fresh: Boolean(png) };
-  const shot = await reshoot(book, id, version).catch(() => null);
-  return { png: shot ?? png, fresh: Boolean(shot) };
+  if (await book.shotIsStale(id, version).catch(() => false)) {
+    const shot = await reshoot(book, id, version, () => book.shotIsStale(id, version), takeShot).catch(() => null);
+    return { png: shot ?? png, fresh: Boolean(shot) };
+  }
+  if (await book.shotIsLowRes(id, version).catch(() => false)) {
+    upgradeLater(book, id, version, takeShot);
+    return { png, fresh: false };
+  }
+  return { png, fresh: true };
 }
 
 async function cacheFor(book, id, version, fresh, url) {
@@ -342,8 +364,8 @@ async function cacheFor(book, id, version, fresh, url) {
   return stamp !== null && (url.searchParams.get("p") ?? "") === stamp ? { "Cache-Control": FOREVER } : {};
 }
 
-async function sendScreenPng(response, book, id, version, url) {
-  const { png, fresh } = await freshPng(book, id, version);
+async function sendScreenPng(response, book, id, version, url, takeShot) {
+  const { png, fresh } = await freshPng(book, id, version, takeShot);
   if (!png) return send(response, 404, { error: "no screenshot yet" });
   return send(response, 200, png, "image/png", await cacheFor(book, id, version, fresh, url));
 }
@@ -363,13 +385,13 @@ async function thumbSlot(work) {
   }
 }
 
-async function sendScreenThumb(response, book, id, version, url, makeThumb) {
+async function sendScreenThumb(response, book, id, version, url, makeThumb, takeShot) {
   const stamp = await book.shotStamp(id, version);
   const stale = await book.shotIsStale(id, version).catch(() => false);
   let webp = stale ? null : await book.thumb(id, version, stamp);
   let fresh = Boolean(webp);
   if (!webp) {
-    const shot = await freshPng(book, id, version);
+    const shot = await freshPng(book, id, version, takeShot);
     if (!shot.png) return send(response, 404, { error: "no screenshot yet" });
     webp = await thumbSlot(() => makeThumb(shot.png));
     fresh = shot.fresh;
@@ -444,7 +466,7 @@ async function knownLogins(context) {
   return new Set((await peopleOf(context)).map((person) => person.login.toLowerCase()));
 }
 
-async function apiRoute({ book, key, live, ai, auth, request, response, path, url, user, people = null, seen = new Map(), makeThumb = defaultThumb }) {
+async function apiRoute({ book, key, live, ai, auth, request, response, path, url, user, people = null, seen = new Map(), makeThumb = defaultThumb, takeShot = defaultShot }) {
   const language = languageOf(request);
   let match;
   if (request.method === "POST" && path === "/api/rpc") return rpcCall(request, response, bookMethods(book, live, key), user);
@@ -508,10 +530,10 @@ async function apiRoute({ book, key, live, ai, auth, request, response, path, ur
     return send(response, 201, await book.saveEdit({ screen: match[1], version: Number(body.version), html: body.html, by: user?.name ?? body.by, lang: language }));
   }
   if (request.method === "GET" && (match = path.match(/^\/api\/screens\/([\w-]+)\/v(\d+)\.png$/))) {
-    return sendScreenPng(response, book, match[1], Number(match[2]), url);
+    return sendScreenPng(response, book, match[1], Number(match[2]), url, takeShot);
   }
   if (request.method === "GET" && (match = path.match(/^\/api\/screens\/([\w-]+)\/v(\d+)\.thumb\.webp$/))) {
-    return sendScreenThumb(response, book, match[1], Number(match[2]), url, makeThumb);
+    return sendScreenThumb(response, book, match[1], Number(match[2]), url, makeThumb, takeShot);
   }
   if (request.method === "GET" && (match = path.match(/^\/api\/comments\/([\w-]+)$/))) {
     return send(response, 200, await book.comments(match[1]));
@@ -626,7 +648,7 @@ function goneLink(request, response, path) {
   );
 }
 
-async function shareRoute({ book, base, token, request, response, path, url, makeThumb = defaultThumb }) {
+async function shareRoute({ book, base, token, request, response, path, url, makeThumb = defaultThumb, takeShot = defaultShot }) {
   const share = await book.openShare(token);
   if (!share) return goneLink(request, response, path);
   let match;
@@ -643,8 +665,8 @@ async function shareRoute({ book, base, token, request, response, path, url, mak
     const [, id, version, kind] = match;
     await book.sharedScreen(share, id, Number(version));
     if (kind === "html") return sendScreenHtml(response, book, id, Number(version));
-    if (kind === "png") return sendScreenPng(response, book, id, Number(version), url);
-    return sendScreenThumb(response, book, id, Number(version), url, makeThumb);
+    if (kind === "png") return sendScreenPng(response, book, id, Number(version), url, takeShot);
+    return sendScreenThumb(response, book, id, Number(version), url, makeThumb, takeShot);
   }
   if (request.method === "GET" && (match = path.match(/^\/api\/comments\/([\w-]+)$/))) {
     await book.sharedScreen(share, match[1]);
@@ -706,7 +728,7 @@ async function connectRoute({ request, response, url, auth, keys }) {
   return response.end();
 }
 
-export function createViewerServer({ store, auth = null, live = createLive(), ai = null, keys = createKeys({ store }), people = null, makeThumb = defaultThumb }) {
+export function createViewerServer({ store, auth = null, live = createLive(), ai = null, keys = createKeys({ store }), people = null, makeThumb = defaultThumb, takeShot = defaultShot }) {
   const single = new Book(store);
   const seen = new Map();
   const bookFor = productBooks(store);
@@ -733,7 +755,7 @@ export function createViewerServer({ store, auth = null, live = createLive(), ai
     if (shared && Boolean(shared[1]) === (await isMultiNow())) {
       const [, product, token, rest = ""] = shared;
       const book = product ? await bookFor(product) : single;
-      return shareRoute({ book, base: sharePath(product, token), token, request, response, path: rest, url, makeThumb });
+      return shareRoute({ book, base: sharePath(product, token), token, request, response, path: rest, url, makeThumb, takeShot });
     }
     const presence = request.method === "POST" && /(^|\/)api\/(presence|rpc)$/.test(path);
     const internal = presence && ai ? ai.userFromToken(request) : null;
@@ -750,7 +772,7 @@ export function createViewerServer({ store, auth = null, live = createLive(), ai
 
     if (!(await isMultiNow())) {
       if (request.method === "GET" && path === "/api/me") return send(response, 200, { auth: Boolean(auth), user, ai: Boolean(ai) });
-      if (path.startsWith("/api/")) return apiRoute({ book: single, key: "", live, ai, auth, request, response, path, url, user, people, seen, makeThumb });
+      if (path.startsWith("/api/")) return apiRoute({ book: single, key: "", live, ai, auth, request, response, path, url, user, people, seen, makeThumb, takeShot });
       if (request.method === "GET" && path === "/") return send(response, 200, await viewerPage(""), TYPES[".html"]);
       return send(response, 404, { error: "not found" });
     }
@@ -783,7 +805,7 @@ export function createViewerServer({ store, auth = null, live = createLive(), ai
       return response.end();
     }
     if (request.method === "GET" && rest === "/api/me") return send(response, 200, { auth: Boolean(auth), user, ai: Boolean(ai) });
-    if (rest.startsWith("/api/")) return apiRoute({ book, key: product, live, ai, auth, request, response, path: rest, url, user, people, seen, makeThumb });
+    if (rest.startsWith("/api/")) return apiRoute({ book, key: product, live, ai, auth, request, response, path: rest, url, user, people, seen, makeThumb, takeShot });
     if (request.method === "GET" && rest === "/") return send(response, 200, await viewerPage(`/${product}`), TYPES[".html"]);
     if (request.method === "GET" && STATIC_FILES.has(rest.slice(1))) return staticRoute(response, rest.slice(1));
     return send(response, 404, { error: "not found" });

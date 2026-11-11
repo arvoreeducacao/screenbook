@@ -4,7 +4,7 @@ import { z } from "zod";
 import { readFile } from "node:fs/promises";
 import { Book, MOBILE, slug } from "./book.js";
 import { bookOn, createProduct, isMulti, listProducts, productBooks } from "./products.js";
-import { inspect, screenshot } from "./render.js";
+import { capture, inspect } from "./render.js";
 import { splitAnnotations } from "../viewer/annotations.js";
 import { arrange } from "../viewer/arrange.js";
 import { presenceSender } from "./presence.js";
@@ -15,6 +15,14 @@ function text(value) {
 
 function image(png) {
   return { type: "image", data: png.toString("base64"), mimeType: "image/png" };
+}
+
+function fontWarning(shot) {
+  if (!shot.fontsNotEmbedded?.length) return {};
+  return {
+    fontsNotEmbedded: shot.fontsNotEmbedded,
+    fontWarning: "These fonts are asked for by name but no @font-face in the screen loads them, so each computer shows whatever it has installed: the screenshot taken elsewhere falls back to another font. Load them in the product head_html or in a shared part, and check that a later rule (for example a class on <body>) does not set the font variable back to the name.",
+  };
 }
 
 function failure(error) {
@@ -57,7 +65,7 @@ export function fit(value, limit = TOOL_ANSWER_LIMIT) {
 
 export function buildTools(
   book,
-  { handle = "claude", render = screenshot, read = inspect, presence = (activity) => book.setPresence(handle, activity), shareLink = (token) => `/s/${token}/`, ask = false } = {},
+  { handle = "claude", render = capture, read = inspect, presence = (activity) => book.setPresence(handle, activity), shareLink = (token) => `/s/${token}/`, ask = false } = {},
 ) {
   function announce(activity) {
     if (!presence) return;
@@ -69,9 +77,9 @@ export function buildTools(
     const entry = meta.versions.find((item) => item.v === version);
     if (!entry) throw new Error(`screen "${id}" has no version ${version}`);
     const size = mobile ? MOBILE : { width: entry.width, height: entry.height };
-    const png = await render(await book.composedHtml(id, version), size);
-    if (!mobile) await book.savePng(id, version, png);
-    return png;
+    const shot = await render(await book.composedHtml(id, version), size);
+    if (!mobile) await book.savePng(id, version, shot.png);
+    return shot;
   }
 
   function pickVersion(meta, version) {
@@ -141,7 +149,7 @@ export function buildTools(
           book.comments(screen),
           book.shotIsStale(screen, chosen).catch(() => false),
         ]);
-        const png = stale ? await shoot(screen, chosen, false).catch(() => book.png(screen, chosen)) : await book.png(screen, chosen);
+        const png = stale ? await shoot(screen, chosen, false).then((shot) => shot.png).catch(() => book.png(screen, chosen)) : await book.png(screen, chosen);
         const { comments, annotations } = splitAnnotations(notes);
         const conversations = comments.map((entry) => (entry.replyTo ? entry : { ...entry, resolved: entry.resolved ?? null }));
         const flows = await book.flows();
@@ -263,9 +271,9 @@ export function buildTools(
           variantOf: input.variant_of,
           by: handle,
         });
-        const png = await shoot(saved.screen, saved.version, false);
+        const shot = await shoot(saved.screen, saved.version, false);
         announce({ action: "drew", screen: saved.screen, version: saved.version, proposal: saved.proposal });
-        return { content: [text(saved), image(png)] };
+        return { content: [text({ ...saved, ...fontWarning(shot) }), image(shot.png)] };
       },
     },
 
@@ -367,8 +375,8 @@ export function buildTools(
         const meta = await book.screen(screen);
         const chosen = pickVersion(meta, version);
         announce({ action: "checking", screen, version: chosen });
-        const png = await shoot(screen, chosen, mobile);
-        return { content: [text({ screen, version: chosen, mobile }), image(png)] };
+        const shot = await shoot(screen, chosen, mobile);
+        return { content: [text({ screen, version: chosen, mobile, ...fontWarning(shot) }), image(shot.png)] };
       },
     },
 
@@ -420,7 +428,7 @@ export function buildTools(
       },
       async run({ screen }) {
         const result = await book.updateParts({ screen, by: handle });
-        const png = result.changed.length ? await shoot(screen, result.version, false) : null;
+        const png = result.changed.length ? (await shoot(screen, result.version, false)).png : null;
         return { content: [text(result), ...(png ? [image(png)] : [])] };
       },
     },
@@ -569,7 +577,7 @@ export function buildTools(
 
 export function buildProductTools(
   store,
-  { handle = "claude", render = screenshot, presenceFor = (book) => (activity) => book.setPresence(handle, activity), viewer = "", ask = false } = {},
+  { handle = "claude", render = capture, presenceFor = (book) => (activity) => book.setPresence(handle, activity), viewer = "", ask = false } = {},
 ) {
   const bookFor = productBooks(store);
   const template = buildTools(new Book(store), { handle, render, presence: null, ask });

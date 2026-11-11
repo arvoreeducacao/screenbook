@@ -13,6 +13,7 @@ import { FLOW, layoutFlow } from "./flow.js";
 import { createTabs } from "./tabs.js";
 import { createLayers } from "./layers.js";
 import { createComponents, partsStamp } from "./components.js";
+import { SHOT_SCALE } from "./shot.js";
 import { createZoom, wheelZoomFactor } from "./zoom.js";
 import { createPalette } from "./palette.js";
 import { createStickies } from "./stickies.js";
@@ -402,7 +403,7 @@ function attachShot(item, entry, box) {
     }, SHOT_RETRIES[tries++]);
   });
   image.dataset.full = `${BASE}/api/screens/${item.screen.id}/v${item.version}.png${stamp ? `?p=${stamp}` : ""}`;
-  image.dataset.width = String(entry.width);
+  image.dataset.width = String(entry.width * SHOT_SCALE);
   image.addEventListener("load", scheduleSharpen, { once: true });
   image.src = source;
   box.prepend(image);
@@ -2637,7 +2638,7 @@ function askAiAbout(info) {
 
 const inspector = createInspector({
   frames: () => [...document.querySelectorAll("#ov-stage iframe")],
-  current: () => (state.overlay && !state.overlay.compare ? { screenId: state.overlay.screenId, version: state.overlay.version } : null),
+  current: () => (state.overlay && !state.overlay.compare ? { screenId: state.overlay.screenId, version: state.overlay.version, width: versionEntry(screenById(state.overlay.screenId), state.overlay.version)?.width } : null),
   base: BASE,
   escapeHtml,
   toast,

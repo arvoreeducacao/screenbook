@@ -36,10 +36,11 @@ export async function loadImage(url) {
   return bitmap;
 }
 
-export async function cropPng(url, box) {
+export async function cropPng(url, box, screenWidth) {
   const image = await loadImage(url);
   if (!image) return null;
-  const area = cropBox(box, image);
+  const scale = screenWidth ? image.width / screenWidth : 1;
+  const area = cropBox({ x: box.x * scale, y: box.y * scale, w: box.w * scale, h: box.h * scale }, image);
   if (!area) return null;
   const canvas = document.createElement("canvas");
   canvas.width = area.w;

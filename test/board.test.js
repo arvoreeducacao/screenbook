@@ -94,7 +94,7 @@ test("a big board is cut to fit what the AI can read", () => {
 test("the AI reads and writes a board through its tools", async () => {
   const book = await freshBook();
   const seen = [];
-  const tools = buildTools(book, { presence: async (activity) => seen.push(activity), render: async () => Buffer.from("") });
+  const tools = buildTools(book, { presence: async (activity) => seen.push(activity), render: async () => ({ png: Buffer.from("") }) });
   const made = JSON.parse((await tools.create_board.run({ name: "Brainstorm" })).content[0].text);
   const wrote = JSON.parse((await tools.write_board.run({ page: made.page, ops: [{ op: "add", item: { type: "sticky", text: "Idea", x: 100, y: 100 } }] })).content[0].text);
   assert.equal(wrote.added.length, 1);
