@@ -9,7 +9,7 @@ const SHORTCUTS = [
     ["Mod+K", "Search screens, sections, proposals or actions"],
     ["Mod+F", "Search the layers"],
     ["PageUp / PageDown", "Previous or next page"],
-    ["Space + drag", "Pan the canvas with any tool"],
+    ["Space + drag / Middle button + drag", "Pan the canvas with any tool"],
     ["Esc", "Close or clear the selection"],
   ]],
   ["Zoom", [
