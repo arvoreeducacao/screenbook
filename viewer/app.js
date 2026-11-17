@@ -42,7 +42,7 @@ const ANNO_WIDTH = 210;
 const ANNO_SPACE = ANNO_GAP + ANNO_WIDTH;
 const POLL_MS = 4000;
 const MIN_SCALE = 0.05;
-const MAX_SCALE = 3;
+const MAX_SCALE = 5;
 const WHEEL_GLIDE_MS = 50;
 const WHEEL_SETTLED = 0.002;
 const BASE = document.querySelector('meta[name="screenbook-base"]')?.content ?? "";
