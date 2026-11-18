@@ -21,6 +21,7 @@ import { createStickies } from "./stickies.js";
 import { startAi } from "./ai.js";
 import { lang, t, translateDom } from "./i18n.js";
 import { openMenu } from "./menu.js";
+import { IMAGES_PER_COMMENT, IMAGE_TYPES, base64Of, fitImage, imagesFrom } from "./attachments.js";
 import { LOCAL_LOGIN, attachMentionPicker, chatHandlesIn, closeMentionPicker, fold, handlesIn, initials, peopleMap, photoHtml, photoOf, replaceHandles, tagsLogin, watchPhotos } from "./mentions.js";
 
 translateDom(document.body);
@@ -29,6 +30,7 @@ document.documentElement.lang = lang;
 let aiPanel = null;
 
 const FRAME_WIDTH = 320;
+const BOXES_TIMEOUT_MS = 10000;
 const FRAME_GAP = 64;
 const MAX_PER_ROW = 18;
 const ROW_GAP = 70;
@@ -83,6 +85,7 @@ const state = {
   device: "all",
   people: new Map(),
   editingComment: null,
+  attachments: { note: [], side: [] },
   commentsPanel: { open: false, tab: "open", filter: "all", query: "" },
 };
 
@@ -915,7 +918,7 @@ async function loadBoxes(screen, version) {
   const key = `${screen}/v${version}`;
   if (key in state.boxes) return;
   state.boxes[key] = undefined;
-  const answer = await askProbe(screen, version, { type: "boxes" });
+  const answer = await askProbe(screen, version, { type: "boxes" }, BOXES_TIMEOUT_MS);
   state.boxes[key] = answer?.boxes ?? {};
   renderPins();
 }
@@ -935,7 +938,7 @@ function renderPins() {
     pin.style.left = `${point.x * 100}%`;
     pin.style.top = `${point.y * 100}%`;
     pin.style.setProperty("--c", thread.waiting ? PIN_COLORS.waiting : PIN_COLORS.human);
-    pin.title = `${thread.root.author}: ${thread.root.text}`;
+    pin.title = `${thread.root.author}: ${thread.root.text || imagesLabel(thread.root)}`;
     pin.setAttribute("aria-label", t("Comment by {author}", { author: thread.root.author }));
     pin.innerHTML = `<span>${photo ? photoHtml(photo, initials(thread.root.author)) : escapeHtml(initials(thread.root.author))}</span>${thread.messages.length > 1 ? `<em>${thread.messages.length}</em>` : ""}`;
     pin.addEventListener("pointerdown", (event) => event.stopPropagation());
@@ -983,6 +986,7 @@ function setTool(tool) {
 }
 
 const SEARCH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>';
+const IMAGE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.75"/><path d="m20.5 16-4.5-4.5-8.5 8"/></svg>';
 const BUBBLE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5a8.5 8.5 0 1 1-4.2 15.9L3.5 20.5l1.1-4.3A8.5 8.5 0 0 1 12 3.5z"/></svg>';
 
 function pageThreads() {
@@ -1021,7 +1025,7 @@ function commentItemHtml(thread) {
   const foot = done || replied || count ? `<span class="cmp-foot">${done}${replied}${count}</span>` : "";
   return `<button type="button" class="cmp-item${state.note?.root === root.id ? " on" : ""}${root.resolved ? " done" : ""}" data-root="${escapeHtml(root.id)}">${avatarHtml(root)}<span class="cmp-body"><span class="cmp-top"><b>${escapeHtml(root.author)}</b><span class="cmp-t">${messageTime(root)}</span>${
     root.edited ? `<span class="cmp-t">${t("· edited")}</span>` : ""
-  }</span><span class="cmp-where">${escapeHtml(where)}</span><span class="cmp-text">${withMentions(root.text)}</span>${foot}</span></button>`;
+  }</span><span class="cmp-where">${escapeHtml(where)}</span><span class="cmp-text">${root.text ? withMentions(root.text) : escapeHtml(imagesLabel(root))}</span>${foot}</span></button>`;
 }
 
 function buildCommentsPanel(panel) {
@@ -1129,6 +1133,7 @@ function startDraft(item, box, event) {
     renderNote(text);
     return;
   }
+  dropAttachments("note");
   state.note = { draft: { item, point, els: piece ? [piece] : [] } };
   renderPins();
   renderNote();
@@ -1190,6 +1195,7 @@ async function openMention(mention) {
 }
 
 function openThread(rootId) {
+  if (state.note?.root !== rootId) dropAttachments("note");
   state.note = { root: rootId };
   markMentionsSeen([rootId]);
   renderPins();
@@ -1199,6 +1205,7 @@ function openThread(rootId) {
 function closeNote() {
   if (!state.note) return;
   closeMentionPicker();
+  dropAttachments("note");
   state.note = null;
   if (state.editingComment?.where === "note") state.editingComment = null;
   $("#note").hidden = true;
@@ -1250,8 +1257,9 @@ function renderNote(keepText = "") {
             }</div>`
       }
       <form class="note-form" id="note-form">
-      <textarea id="note-text" rows="3" placeholder="${shared ? t("Write a comment") : t("Write a comment. @ tags a person or @{handle} asks the chat", { handle: HANDLE })}" required></textarea>
-      <div class="row"><span class="muted grow">${t("Enter sends · Esc cancels")}</span><button class="btn primary sm">${t("Comment")}</button></div>
+      <textarea id="note-text" rows="3" placeholder="${shared ? t("Write a comment") : t("Write a comment. @ tags a person or @{handle} asks the chat", { handle: HANDLE })}"></textarea>
+      ${attachSlotHtml("note")}
+      <div class="row"><span class="muted grow">${t("Enter sends · Esc cancels")}</span>${attachButtonHtml("note")}<button class="btn primary sm">${t("Comment")}</button></div>
     </form>`;
   } else {
     const thread = noteThreads().find((entry) => entry.root.id === state.note.root);
@@ -1262,7 +1270,7 @@ function renderNote(keepText = "") {
       <div class="note-msgs">${thread.messages.map((message) => messageHtml(message, "note")).join("")}${
         thread.waiting ? `<div class="waiting-line"><i class="dot" style="background:var(--agent)"></i>${t("waiting for a chat to reply")}</div>` : ""
       }</div>
-      <form class="note-form" id="note-form"><textarea id="note-text" rows="1" placeholder="${t("Reply")}" required></textarea><div class="row end"><button class="btn primary sm">${t("Reply")}</button></div></form>`;
+      <form class="note-form" id="note-form"><textarea id="note-text" rows="1" placeholder="${t("Reply")}"></textarea>${attachSlotHtml("note")}<div class="row end">${attachButtonHtml("note")}<button class="btn primary sm">${t("Reply")}</button></div></form>`;
     note.querySelector('[data-action="close"]').addEventListener("click", closeNote);
     note.querySelector('[data-action="resolve"]')?.addEventListener("click", () => resolveThread(thread.root.id));
     note.querySelector('[data-action="edit-thread"]')?.addEventListener("click", () => {
@@ -1280,6 +1288,7 @@ function renderNote(keepText = "") {
   const text = $("#note-text");
   if (keepText) text.value = keepText;
   attachPicker(text);
+  bindAttachments($("#note-form"), "note", text);
   const editing = bindMessages(note, "note", editCaret);
   note.querySelector('[data-action="ask"]')?.addEventListener("click", () => {
     if (!new RegExp(`@${HANDLE}\\b`, "i").test(text.value)) text.value = `@${HANDLE} ${text.value}`.trimEnd() + " ";
@@ -1308,19 +1317,22 @@ function renderNote(keepText = "") {
 async function submitNote(event) {
   event.preventDefault();
   const text = $("#note-text").value.trim();
-  if (!text || !state.note) return;
+  const images = [...state.attachments.note];
+  if ((!text && !images.length) || !state.note) return;
   if (state.note.draft) {
     const { item, point, els } = state.note.draft;
     const el = els.length ? els[0] : askProbe(item.screen.id, item.version, { type: "probe", ...point }, 800).then((probed) => probed?.el ?? null);
-    const sent = await sendComment({ screen: item.screen.id, el, els: els.length ? els : null, point, version: item.version, text });
+    const sent = await sendComment({ screen: item.screen.id, el, els: els.length ? els : null, point, version: item.version, text, images });
     if (!sent) return;
+    state.attachments.note = [];
     state.note = { root: sent.id };
     if (chatHandlesIn(text, state.people).length) toast(t("Sent to @{handle}. It reaches whichever chat is listening.", { handle: HANDLE }));
   } else {
     const root = noteThreads().find((entry) => entry.root.id === state.note.root)?.root;
     if (!root) return;
-    const sent = await sendComment({ screen: root.screen, el: root.el, els: root.els, point: root.point, version: root.version, text, replyTo: root.id });
+    const sent = await sendComment({ screen: root.screen, el: root.el, els: root.els, point: root.point, version: root.version, text, replyTo: root.id, images });
     if (!sent) return;
+    state.attachments.note = [];
   }
   renderPins();
   renderNote();
@@ -2226,11 +2238,12 @@ const SETTLED_KEEP_MS = 30000;
 function withPending(list = [], screen = null) {
   const known = new Set(list.map((entry) => entry.id));
   for (const [id, entry] of pendingComments) if (entry.settledAt && (known.has(id) || Date.now() - entry.settledAt > SETTLED_KEEP_MS)) pendingComments.delete(id);
-  const all = [...list, ...[...pendingComments.values()].filter((entry) => (!screen || entry.screen === screen) && !known.has(entry.id))];
+  const all = [...list, ...[...pendingComments.values()].filter((entry) => (!screen || entry.screen === screen) && !known.has(entry.id))].filter((entry) => !deleting.has(entry.id) && !deleting.has(entry.replyTo));
   return resolving.size ? all.map((entry) => (resolving.has(entry.id) ? { ...entry, resolved: resolving.get(entry.id) } : entry)) : all;
 }
 
 const resolving = new Map();
+const deleting = new Set();
 
 async function resolveThread(root, reopen = false) {
   const name = await ensureName();
@@ -2256,12 +2269,13 @@ function rerenderComments() {
   if (state.overlay) renderSide();
 }
 
-function settleComment(entry, saved) {
+function settleComment(entry, saved, images) {
   pendingComments.delete(entry.id);
   pendingComments.set(saved.id, { ...saved, settledAt: Date.now() });
   for (const child of pendingComments.values()) if (child.replyTo === entry.id) child.replyTo = saved.id;
   if (state.note?.root === entry.id) state.note.root = saved.id;
   rerenderComments();
+  images.forEach((image) => URL.revokeObjectURL(image.url));
 }
 
 function dropComment(entry, retry) {
@@ -2273,7 +2287,7 @@ function dropComment(entry, retry) {
   if (retry) toast(t("Couldn't send the comment."), { label: t("Try again"), run: retry });
 }
 
-async function sendComment({ screen, el, els, point, version, text, replyTo }) {
+async function sendComment({ screen, el, els, point, version, text, replyTo, images = [] }) {
   const name = await ensureName();
   if (!name) return null;
   const entry = {
@@ -2287,6 +2301,7 @@ async function sendComment({ screen, el, els, point, version, text, replyTo }) {
     ...(myLogin() ? { login: myLogin() } : {}),
     kind: "human",
     text,
+    ...(images.length ? { images: images.map((image) => ({ preview: image.url })) } : {}),
     replyTo: replyTo ?? null,
     at: new Date().toISOString(),
     pending: true,
@@ -2295,11 +2310,12 @@ async function sendComment({ screen, el, els, point, version, text, replyTo }) {
   pendingComments.set(entry.id, entry);
   entry.saved = (async () => {
     const root = parent ? (await parent.saved).id : replyTo;
-    return post(`${BASE}/api/comments`, { screen, el: await el, els, point, version, text, author: name, replyTo: root ?? null });
+    const encoded = await Promise.all(images.map((image) => base64Of(image.blob)));
+    return post(`${BASE}/api/comments`, { screen, el: await el, els, point, version, text, author: name, replyTo: root ?? null, ...(encoded.length ? { images: encoded } : {}) });
   })();
   entry.saved.then(
-    (saved) => settleComment(entry, saved),
-    () => dropComment(entry, parent ? null : () => sendComment({ screen, el, els, point, version, text, replyTo })),
+    (saved) => settleComment(entry, saved, images),
+    () => dropComment(entry, parent ? null : () => sendComment({ screen, el, els, point, version, text, replyTo, images })),
   );
   return entry;
 }
@@ -2318,6 +2334,10 @@ function threadsOf(comments) {
   });
 }
 
+function isRootOfThread(message) {
+  return !message.replyTo;
+}
+
 function canEditComment(message) {
   const login = myLogin();
   return !shared && Boolean(login) && message.kind === "human" && !message.pending && typeof message.login === "string" && message.login.toLowerCase() === login.toLowerCase();
@@ -2333,7 +2353,112 @@ function messageHtml(message, where, extra = "") {
     : withMentions(message.text);
   return `<div class="msg${message.pending ? " pending" : ""}">${avatarHtml(message)}<div class="bd"><div class="nm">${escapeHtml(message.author)}${authorTag(message)}<span class="t">${messageTime(message)}${extra}</span>${
     message.edited ? `<span class="t">${t("· edited")}</span>` : ""
-  }${more}</div>${body}</div></div>`;
+  }${more}</div>${body}${messageImagesHtml(message)}</div></div>`;
+}
+
+function imagesLabel(message) {
+  const count = message.images?.length ?? 0;
+  return t(count === 1 ? "1 image" : "{n} images", { n: count });
+}
+
+function attachmentUrl(screen, file) {
+  return `${BASE}/api/attachments/${encodeURIComponent(screen)}/${encodeURIComponent(file)}`;
+}
+
+function messageImagesHtml(message) {
+  if (!message.images?.length) return "";
+  const alt = escapeHtml(t("Image attached by {author}", { author: message.author }));
+  return `<div class="msg-images">${message.images
+    .map((image) => {
+      const src = escapeHtml(image.preview ?? attachmentUrl(message.screen, image.file));
+      return `<a class="msg-image" href="${src}" target="_blank" rel="noopener"><img src="${src}" alt="${alt}" loading="lazy"></a>`;
+    })
+    .join("")}</div>`;
+}
+
+function attachButtonHtml(where) {
+  if (shared) return "";
+  return `<button type="button" class="icon-btn attach-btn" data-attach="${where}" title="${t("Attach an image")}" aria-label="${t("Attach an image")}">${IMAGE_ICON}</button><input type="file" accept="${Object.values(IMAGE_TYPES).join(",")}" multiple hidden data-attach-input="${where}">`;
+}
+
+function attachSlotHtml(where) {
+  return shared ? "" : `<div class="att-slot" data-att-slot="${where}">${attachStripHtml(where)}</div>`;
+}
+
+function attachStripHtml(where) {
+  const list = state.attachments[where];
+  if (!list.length) return "";
+  return `<div class="att-strip">${list
+    .map((image, index) => `<span class="att-item"><img src="${escapeHtml(image.url)}" alt=""><button type="button" class="att-remove" data-detach="${index}" title="${t("Remove image")}" aria-label="${t("Remove image")}">✕</button></span>`)
+    .join("")}</div>`;
+}
+
+function renderAttachments(where) {
+  const slot = document.querySelector(`[data-att-slot="${where}"]`);
+  if (!slot) return;
+  slot.innerHTML = attachStripHtml(where);
+  slot.querySelectorAll("[data-detach]").forEach((button) =>
+    button.addEventListener("click", () => {
+      const [removed] = state.attachments[where].splice(Number(button.dataset.detach), 1);
+      if (removed) URL.revokeObjectURL(removed.url);
+      renderAttachments(where);
+    }),
+  );
+  placeNote();
+}
+
+function dropAttachments(where) {
+  state.attachments[where].forEach((image) => URL.revokeObjectURL(image.url));
+  state.attachments[where] = [];
+}
+
+async function addAttachments(where, files) {
+  if (!files.length) return;
+  const room = IMAGES_PER_COMMENT - state.attachments[where].length;
+  if (files.length > room) toast(t("A comment takes at most {n} images.", { n: IMAGES_PER_COMMENT }));
+  for (const file of files.slice(0, Math.max(0, room))) {
+    try {
+      const blob = await fitImage(file);
+      state.attachments[where].push({ blob, url: URL.createObjectURL(blob) });
+    } catch {
+      toast(t("Couldn't read this image."));
+    }
+  }
+  renderAttachments(where);
+}
+
+function bindAttachments(container, where, field) {
+  if (shared) return;
+  renderAttachments(where);
+  const input = container.querySelector(`[data-attach-input="${where}"]`);
+  container.querySelector(`[data-attach="${where}"]`)?.addEventListener("click", () => input?.click());
+  input?.addEventListener("change", () => {
+    addAttachments(where, imagesFrom(input));
+    input.value = "";
+    field.focus();
+  });
+  field.addEventListener("paste", (event) => {
+    const files = imagesFrom(event.clipboardData);
+    if (!files.length) return;
+    event.preventDefault();
+    addAttachments(where, files);
+  });
+  container.addEventListener("dragover", (event) => {
+    if (![...(event.dataTransfer?.types ?? [])].includes("Files")) return;
+    event.preventDefault();
+    container.classList.add("dropping");
+  });
+  container.addEventListener("dragleave", (event) => {
+    if (!container.contains(event.relatedTarget)) container.classList.remove("dropping");
+  });
+  container.addEventListener("drop", (event) => {
+    const files = imagesFrom(event.dataTransfer);
+    container.classList.remove("dropping");
+    if (!files.length) return;
+    event.preventDefault();
+    addAttachments(where, files);
+    field.focus();
+  });
 }
 
 function caretIn(container) {
@@ -2346,7 +2471,18 @@ function bindMessages(container, where, caret = null) {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
       const id = button.dataset.more;
-      openMenu({ menu: $("#frame-menu"), close: closeFrameMenu, event, entries: [{ label: t("Edit"), run: () => startCommentEdit(id, where) }] });
+      const message = findMessage(id);
+      const remove = message && isRootOfThread(message) ? t("Delete thread") : t("Delete comment");
+      openMenu({
+        menu: $("#frame-menu"),
+        close: closeFrameMenu,
+        event,
+        entries: [
+          { label: t("Edit"), run: () => startCommentEdit(id, where) },
+          null,
+          { label: remove, danger: true, run: () => deleteComment(id) },
+        ],
+      });
     }),
   );
   const field = state.editingComment?.where === where ? container.querySelector(".edit-text") : null;
@@ -2409,6 +2545,32 @@ function applyCommentEdit(id, { text, edited }) {
   }
 }
 
+async function deleteComment(id) {
+  const message = findMessage(id);
+  if (!message || !canEditComment(message)) return;
+  const replies = isRootOfThread(message) ? withPending(state.data?.notes ?? []).filter((entry) => entry.replyTo === id).length : 0;
+  const question = replies
+    ? t(replies === 1 ? "Delete this thread and its reply? This cannot be undone." : "Delete this thread and its {n} replies? This cannot be undone.", { n: replies })
+    : t("Delete this comment? This cannot be undone.");
+  if (!confirm(question)) return;
+  if (state.editingComment?.id === id) state.editingComment = null;
+  deleting.add(id);
+  if (isRootOfThread(message) && state.note?.root === id) closeNote();
+  rerenderComments();
+  try {
+    const { removed } = await post(`${BASE}/api/comments/${encodeURIComponent(id)}/delete`, {});
+    const gone = new Set(removed);
+    if (state.data) state.data.notes = state.data.notes.filter((entry) => !gone.has(entry.id));
+    if (state.overlay) state.overlay.comments = state.overlay.comments.filter((entry) => !gone.has(entry.id));
+    await refresh(true).catch(() => {});
+  } catch (error) {
+    toast(t("Couldn't delete the comment: {error}", { error: error.message }), { label: t("Try again"), run: () => deleteComment(id) });
+  } finally {
+    deleting.delete(id);
+    rerenderComments();
+  }
+}
+
 async function saveCommentEdit(id = state.editingComment?.id, text = state.editingComment?.text) {
   const where = state.editingComment?.id === id ? state.editingComment.where : null;
   const message = id ? findMessage(id) : null;
@@ -2451,6 +2613,7 @@ function closeOverlay() {
   closeExportMenu();
   closeMentionPicker();
   if (state.editingComment?.where === "side") state.editingComment = null;
+  dropAttachments("side");
   state.overlay = null;
   $("#overlay").hidden = true;
   editing.renderBar();
@@ -2944,14 +3107,16 @@ function renderSide() {
           .map((name) => `<option value="${escapeHtml(name)}" ${name === overlay.focusEl ? "selected" : ""}>${escapeHtml(name)}</option>`)
           .join("")}
       </select></label><div class="grow"></div></div>
-      <textarea id="composer-text" placeholder="${shared ? t("Write a comment") : t("Write a comment. @ tags a person or @{handle} asks the chat", { handle: HANDLE })}" required></textarea>
-      <div class="row end"><button class="btn primary sm">${t("Comment")}</button></div>
+      <textarea id="composer-text" placeholder="${shared ? t("Write a comment") : t("Write a comment. @ tags a person or @{handle} asks the chat", { handle: HANDLE })}"></textarea>
+      ${attachSlotHtml("side")}
+      <div class="row end">${attachButtonHtml("side")}<button class="btn primary sm">${t("Comment")}</button></div>
     </form>`;
   side.querySelectorAll('.thread [data-action="resolve"]').forEach((button) => button.addEventListener("click", () => resolveThread(button.closest(".thread").dataset.root)));
   side.querySelectorAll('.thread [data-action="reopen"]').forEach((button) => button.addEventListener("click", () => resolveThread(button.closest(".thread").dataset.root, true)));
   side.querySelector(".resolved-group")?.addEventListener("toggle", (event) => (overlay.showResolved = event.target.open));
   side.querySelectorAll(".thread form.reply input").forEach(attachPicker);
   attachPicker($("#composer-text"));
+  bindAttachments($("#composer"), "side", $("#composer-text"));
   bindMessages(side, "side", editCaret);
   side.querySelectorAll(".thread form.reply").forEach((form) =>
     form.addEventListener("submit", async (event) => {
@@ -2972,9 +3137,11 @@ function renderSide() {
   $("#composer").addEventListener("submit", async (event) => {
     event.preventDefault();
     const text = $("#composer-text").value.trim();
-    if (!text) return;
-    const sent = await sendComment({ screen: overlay.screenId, el: overlay.focusEl, version: overlay.version, text });
+    const images = [...state.attachments.side];
+    if (!text && !images.length) return;
+    const sent = await sendComment({ screen: overlay.screenId, el: overlay.focusEl, version: overlay.version, text, images });
     if (!sent) return;
+    state.attachments.side = [];
     if (chatHandlesIn(text, state.people).length) toast(t("Sent. It reaches whichever chat is listening."));
     overlay.commenting = false;
     $("#ov-comment").classList.remove("on");

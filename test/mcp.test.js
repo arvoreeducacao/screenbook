@@ -101,6 +101,7 @@ test("read_proposal brings every conversation of the proposal, open ones first",
   const first = await book.comment({ screen: "a", el: "x", version: 1, text: "resolved", author: "ana" });
   await book.resolve({ comment: first.id, by: "ana" });
   await book.comment({ screen: "b", version: 1, text: "change the title", author: "ana" });
+  await new Promise((resolve) => setTimeout(resolve, 5));
   await tools.annotate.run({ screen: "a", text: "why" });
   const read = JSON.parse((await tools.read_proposal.run({ proposal: "p" })).content[0].text);
   assert.equal(read.open, 1);
@@ -319,4 +320,24 @@ test("a component is versioned, read back with who uses it, and official screens
   assert.equal(read.versions[1].note, "goals");
   const updated = JSON.parse((await tools.update_parts.run({ screen: "deals" })).content[0].text);
   assert.deepEqual(updated.changed, [{ part: "menu", from: 1, to: 2 }]);
+});
+
+test("read_screen and read_proposal show the AI the images of the open conversations, labelled by comment", async () => {
+  const { book, tools } = await setup();
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(16)]);
+  await tools.write_screen.run({ proposal: "p", name: "List", section: "Deals", html: "<p data-el='row'>one</p>" });
+  const open = await book.comment({ screen: "list", el: "row", text: "@claude like this print", author: "Marina", images: [png, jpeg] });
+  const closed = await book.comment({ screen: "list", text: "old", author: "Marina", images: [png] });
+  await book.resolve({ comment: closed.id, by: "Marina" });
+  const screen = await tools.read_screen.run({ screen: "list" });
+  const images = screen.content.filter((block) => block.type === "image");
+  assert.equal(images.length, 3);
+  assert.deepEqual(images.slice(1).map((block) => block.mimeType), ["image/png", "image/jpeg"]);
+  assert.equal(images[1].data, png.toString("base64"));
+  assert.ok(screen.content.some((block) => block.type === "text" && block.text.includes(`comment ${open.id}`)));
+  const proposal = await tools.read_proposal.run({ proposal: "p" });
+  const read = JSON.parse(proposal.content[0].text);
+  assert.deepEqual(read.threads.find((thread) => thread.id === open.id).messages[0].images, open.images.map((image) => image.file));
+  assert.equal(proposal.content.filter((block) => block.type === "image").length, 2);
 });

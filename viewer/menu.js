@@ -16,7 +16,7 @@ export function openMenu({ menu, close, event, title, entries, anchor }) {
   menu.innerHTML = `${title ? `<div class="fm-title">${escapeHtml(title)}</div>` : ""}${entries
     .map((entry, index) =>
       entry
-        ? `<button class="fm-item${entry.on ? " on" : ""}" data-index="${index}"${entry.disabled ? " disabled" : ""}><span>${escapeHtml(entry.label)}</span>${entry.keys ? `<kbd>${escapeHtml(keyLabel(entry.keys))}</kbd>` : ""}</button>`
+        ? `<button class="fm-item${entry.on ? " on" : ""}${entry.danger ? " danger" : ""}" data-index="${index}"${entry.disabled ? " disabled" : ""}><span>${escapeHtml(entry.label)}</span>${entry.keys ? `<kbd>${escapeHtml(keyLabel(entry.keys))}</kbd>` : ""}</button>`
         : '<div class="fm-sep"></div>',
     )
     .join("")}`;

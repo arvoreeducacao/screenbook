@@ -141,3 +141,15 @@ test("a visitor cannot resolve a conversation, a signed-in person resolves it in
   const signed = await fetch(`${base}/crm/api/comments/${root.id}/resolve`, { method: "POST", headers: { ...session, ...json }, body: JSON.stringify({ by: "Other" }) });
   assert.equal((await signed.json()).resolved.by, "Marina");
 });
+
+test("a visitor sees the images of the shared proposal's comments, and cannot attach any", async () => {
+  const entry = await share("kpis-2");
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  const mine = await book.comment({ screen: "home", version: 2, text: "like this", author: "Marina", login: "marina", images: [png] });
+  const hidden = await book.comment({ screen: "settings", version: 1, text: "secret print", author: "Marina", login: "marina", images: [png] });
+  assert.equal((await fetch(`${base}${entry.path}api/attachments/home/${mine.images[0].file}`)).status, 200);
+  assert.equal((await fetch(`${base}${entry.path}api/attachments/settings/${hidden.images[0].file}`)).status, 404);
+  const posted = await fetch(`${base}${entry.path}api/comments`, { method: "POST", headers: json, body: JSON.stringify({ screen: "home", version: 2, text: "mine too", author: "Ana", images: [png] }) });
+  assert.equal(posted.status, 201);
+  assert.equal((await posted.json()).images, undefined);
+});

@@ -534,8 +534,8 @@ body:has(#inspector:not([hidden])) .minimap, body:has(#ai-panel:not([hidden]):no
 .sidebar.side-components #layers-group, .sidebar.side-components #proposals-group, .sidebar.side-components #archived-group { display: none !important; }
 body.shared #side-tabs { display: none; }
 
-:root { --accent-ink: #0A6FC2; --mention-ink: #C2361A; }
-:root[data-theme="dark"] { --accent-ink: #7CC4FF; --mention-ink: #FF8A6E; }
+:root { --accent-ink: #0A6FC2; --mention-ink: #C2361A; --danger-ink: #C2361A; --danger-strong: #C2361A; }
+:root[data-theme="dark"] { --accent-ink: #7CC4FF; --mention-ink: #FF8A6E; --danger-ink: #FF8A6E; }
 
 .mention.person, .mention.you, .mention.chat { display: inline-flex; align-items: center; gap: 3px; padding: 0 4px; border-radius: 4px; font-weight: 600; vertical-align: baseline; }
 .mention.person { background: var(--accent-soft); color: var(--accent-ink); }
@@ -555,6 +555,22 @@ body.shared #side-tabs { display: none; }
 .msg-edit { display: flex; flex-direction: column; gap: 6px; margin-top: 2px; white-space: normal; }
 .msg-edit textarea { width: 100%; min-height: 52px; max-height: 160px; field-sizing: content; resize: none; border: 0; outline: 0; border-radius: 8px; padding: 8px 10px; background: var(--sunk); color: var(--ink); font: 12px/1.45 var(--font); box-shadow: 0 0 0 1.5px var(--accent); }
 .msg-edit-row { display: flex; justify-content: flex-end; gap: 6px; }
+.fm-item.danger { color: var(--danger-ink); }
+.fm-item.danger:hover, .fm-item.danger:focus-visible { background: var(--danger-strong); color: #fff; }
+.msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; white-space: normal; }
+.msg-image { display: block; width: 72px; height: 72px; border-radius: 8px; overflow: hidden; background: var(--sunk); box-shadow: 0 0 0 1px var(--line); }
+.msg-image img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.msg-image:hover, .msg-image:focus-visible { box-shadow: 0 0 0 1.5px var(--accent); }
+.msg.pending .msg-image { opacity: 0.6; }
+.att-slot:empty { display: none; }
+.att-strip { display: flex; flex-wrap: wrap; gap: 6px; }
+.att-item { position: relative; width: 56px; height: 56px; border-radius: 8px; overflow: hidden; background: var(--sunk); box-shadow: 0 0 0 1px var(--line); }
+.att-item img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.att-remove { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; color: #fff; background: rgba(0, 0, 0, 0.6); }
+.att-remove:hover, .att-remove:focus-visible { background: rgba(0, 0, 0, 0.85); }
+.attach-btn { flex: none; color: var(--ink-3); }
+.attach-btn:hover, .attach-btn:focus-visible { color: var(--ink); }
+.note-form.dropping, .composer.dropping { box-shadow: inset 0 0 0 2px var(--accent); }
 
 .mention-picker { position: fixed; z-index: 45; width: min(260px, calc(100vw - 16px)); max-height: min(320px, calc(100vh - 16px)); overflow: auto; display: flex; flex-direction: column; gap: 1px; padding: 6px; border-radius: 10px; background: var(--surface); box-shadow: var(--shadow-float); }
 .mp-group { padding: 6px 8px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3); }

@@ -199,3 +199,28 @@ test("the people list merges the repository's people with commenters, and falls 
     running.close();
   }
 });
+
+const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+test("a comment carries images through the API, served as images and gone with the comment", async () => {
+  const post = (path, body) => fetch(`${base}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const posted = await post("/api/comments", { screen: "list", el: "row", text: "like this", author: "You", images: [PNG_BASE64] });
+  assert.equal(posted.status, 201);
+  const comment = await posted.json();
+  const [image] = comment.images;
+  const served = await fetch(`${base}/api/attachments/list/${image.file}`);
+  assert.equal(served.status, 200);
+  assert.equal(served.headers.get("content-type"), "image/png");
+  assert.equal(served.headers.get("x-content-type-options"), "nosniff");
+  assert.match(served.headers.get("content-security-policy"), /sandbox/);
+  assert.ok(Buffer.from(await served.arrayBuffer()).equals(Buffer.from(PNG_BASE64, "base64")));
+  assert.equal((await post("/api/comments", { screen: "list", text: "x", author: "You", images: ["PHN2Zz48L3N2Zz4="] })).status, 400);
+  const theirs = await book.comment({ screen: "list", text: "wider", author: "Rafa", login: "rafa" });
+  assert.equal((await post(`/api/comments/${theirs.id}/delete`, {})).status, 403);
+  const deleted = await post(`/api/comments/${comment.id}/delete`, {});
+  assert.equal(deleted.status, 200);
+  assert.deepEqual((await deleted.json()).removed, [comment.id]);
+  assert.equal((await fetch(`${base}/api/attachments/list/${image.file}`)).status, 404);
+  assert.equal((await fetch(`${base}/api/attachments/list/nope.svg`)).status, 404);
+  assert.equal((await post("/api/comments/nope1234/delete", {})).status, 404);
+});

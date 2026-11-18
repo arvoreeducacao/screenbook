@@ -44,6 +44,8 @@ export const RPC_METHODS = new Set([
   "link",
   "comments",
   "comment",
+  "deleteComment",
+  "commentImage",
   "annotate",
   "annotations",
   "removeAnnotation",

@@ -494,3 +494,63 @@ test("a chat mention added by an edit waits even when the chat answered the thre
   await book.reply({ comment: root.id, text: "done too", author: "claude" });
   assert.equal((await book.pendingMentions("claude")).length, 0);
 });
+
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
+
+test("deleting a reply takes only that reply, and only its author can", async () => {
+  const book = await freshBook();
+  await book.writeScreen({ proposal: "p", name: "List", section: "S", html: "<p>a</p>" });
+  const root = await book.comment({ screen: "list", text: "bigger", author: "Ana", login: "ana" });
+  const reply = await book.comment({ screen: "list", text: "and bolder", author: "Bia", login: "bia", replyTo: root.id });
+  await assert.rejects(book.deleteComment({ id: reply.id, login: "ana" }), /only the author/);
+  const answer = await book.reply({ comment: root.id, text: "ok", author: "claude" });
+  await assert.rejects(book.deleteComment({ id: answer.id, login: "claude" }), /only the author/);
+  const result = await book.deleteComment({ id: reply.id, login: "Bia" });
+  assert.deepEqual(result, { screen: "list", removed: [reply.id], thread: null });
+  assert.deepEqual((await book.comments("list")).map((entry) => entry.id), [root.id, answer.id]);
+  await assert.rejects(book.deleteComment({ id: reply.id, login: "bia" }), /no comment/);
+});
+
+test("deleting the first comment takes the whole thread, and its mention stops waiting", async () => {
+  const book = await freshBook();
+  await book.writeScreen({ proposal: "p", name: "List", section: "S", html: "<p>a</p>" });
+  const root = await book.comment({ screen: "list", text: "@claude bigger", author: "Ana", login: "ana" });
+  await book.comment({ screen: "list", text: "agreed", author: "Bia", login: "bia", replyTo: root.id });
+  const other = await book.comment({ screen: "list", text: "smaller", author: "Bia", login: "bia" });
+  assert.equal((await book.pendingMentions("claude")).length, 1);
+  await assert.rejects(book.deleteComment({ id: root.id, login: "bia" }), /only the author/);
+  const result = await book.deleteComment({ id: root.id, login: "ana" });
+  assert.equal(result.thread, root.id);
+  assert.equal(result.removed.length, 2);
+  assert.deepEqual((await book.comments("list")).map((entry) => entry.id), [other.id]);
+  assert.deepEqual(await book.pendingMentions("claude"), []);
+});
+
+test("a comment keeps its images apart from the text, and they go with it", async () => {
+  const book = await freshBook();
+  await book.writeScreen({ proposal: "p", name: "List", section: "S", html: "<p>a</p>" });
+  const root = await book.comment({ screen: "list", text: "@claude like this", author: "Ana", login: "ana", images: [PNG, PNG.toString("base64")] });
+  assert.equal(root.images.length, 2);
+  assert.ok(root.images.every((image) => image.type === "image/png" && /^[\w-]+\.png$/.test(image.file)));
+  const found = await book.commentImage("list", root.images[0].file);
+  assert.equal(found.type, "image/png");
+  assert.ok(found.data.equals(PNG));
+  const [mention] = await book.pendingMentions("claude");
+  assert.equal(mention.images, 2);
+  const only = await book.comment({ screen: "list", text: "", author: "Ana", login: "ana", images: [PNG], replyTo: root.id });
+  assert.equal(only.text, "");
+  await book.deleteComment({ id: root.id, login: "ana" });
+  await assert.rejects(book.commentImage("list", root.images[0].file), /no image/);
+  assert.equal((await book.store.read(`attachments/list/${only.images[0].file}`)).length, 0);
+});
+
+test("a comment refuses images that are not images, too big or too many", async () => {
+  const book = await freshBook();
+  await book.writeScreen({ proposal: "p", name: "List", section: "S", html: "<p>a</p>" });
+  await assert.rejects(book.comment({ screen: "list", text: "x", author: "Ana", images: [Buffer.from("<svg onload=alert(1)></svg>")] }), /PNG, JPEG, WebP or GIF/);
+  await assert.rejects(book.comment({ screen: "list", text: "x", author: "Ana", images: [Buffer.concat([PNG, Buffer.alloc(5_000_001)])] }), /at most 5 MB/);
+  await assert.rejects(book.comment({ screen: "list", text: "x", author: "Ana", images: [PNG, PNG, PNG, PNG, PNG] }), /at most 4 images/);
+  await assert.rejects(book.comment({ screen: "list", text: "  ", author: "Ana" }), /empty/);
+  await assert.rejects(book.commentImage("list", "../comments/list.jsonl"), /no image/);
+  assert.deepEqual(await book.comments("list"), []);
+});
