@@ -134,17 +134,18 @@ const BRIDGE = `<script>
       var piece = hit && hit.closest("[data-el]");
       parent.postMessage({ type: "probed", id: data.id, el: piece ? piece.getAttribute("data-el") : null }, "*");
     }
-    if (data.type === "boxes") {
-      var boxes = {};
-      document.querySelectorAll("[data-el]").forEach(function (node) {
-        var name = node.getAttribute("data-el");
-        var box = node.getBoundingClientRect();
-        if (!name || boxes[name] || (!box.width && !box.height)) return;
-        boxes[name] = { left: (box.left + scrollX) / innerWidth, top: (box.top + scrollY) / innerHeight, width: box.width / innerWidth, height: box.height / innerHeight };
-      });
-      parent.postMessage({ type: "boxes", id: data.id, boxes: boxes }, "*");
-    }
+    if (data.type === "boxes") whenSettled().then(function () { measure(data.id); });
   });
+  function measure(id) {
+    var boxes = {};
+    document.querySelectorAll("[data-el]").forEach(function (node) {
+      var name = node.getAttribute("data-el");
+      var box = node.getBoundingClientRect();
+      if (!name || boxes[name] || (!box.width && !box.height)) return;
+      boxes[name] = { left: (box.left + scrollX) / innerWidth, top: (box.top + scrollY) / innerHeight, width: box.width / innerWidth, height: box.height / innerHeight };
+    });
+    parent.postMessage({ type: "boxes", id: id, boxes: boxes }, "*");
+  }
   document.addEventListener("click", function (event) {
     if (!commenting) return;
     event.preventDefault();
@@ -159,9 +160,14 @@ const BRIDGE = `<script>
     if (document.readyState === "complete") return Promise.resolve();
     return new Promise(function (resolve) { addEventListener("load", function () { resolve(); }, { once: true }); });
   }
-  function settle(id) {
+  var settled = null;
+  function whenSettled() {
     var fonts = function () { return document.fonts ? document.fonts.ready : null; };
-    loaded().then(nextFrame).then(fonts).then(nextFrame, nextFrame).then(nextFrame).then(function () {
+    if (!settled) settled = loaded().then(nextFrame).then(fonts).then(nextFrame, nextFrame).then(nextFrame);
+    return settled;
+  }
+  function settle(id) {
+    whenSettled().then(function () {
       parent.postMessage({ type: "settled", id: id }, "*");
     });
   }
@@ -225,6 +231,7 @@ STATIC_FILES.add("flow.js");
 STATIC_FILES.add("mentions.js");
 STATIC_FILES.add("shot.js");
 STATIC_FILES.add("card-frames.js");
+STATIC_FILES.add("attachments.js");
 
 function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
@@ -426,6 +433,18 @@ async function sendPartHtml(response, book, id, version) {
   });
 }
 
+const COMMENT_BODY_LIMIT = 28_000_000;
+const ATTACHMENT = /^\/api\/attachments\/([\w-]+)\/([\w.-]+)$/;
+
+async function sendAttachment(response, book, screen, file) {
+  const { data, type } = await book.commentImage(screen, file);
+  return send(response, 200, data, type, {
+    "Cache-Control": "private, max-age=31536000, immutable",
+    "Content-Security-Policy": "default-src 'none'; sandbox",
+    "X-Content-Type-Options": "nosniff",
+  });
+}
+
 async function rpcCall(request, response, methods, user = null) {
   const body = await readBody(request, 40_000_000);
   const method = String(body.method ?? "");
@@ -556,10 +575,16 @@ async function apiRoute({ book, key, live, ai, auth, request, response, path, ur
   if (request.method === "GET" && path === "/api/people") {
     return send(response, 200, await peopleOf({ book, people, seen, user }));
   }
+  if (request.method === "GET" && (match = path.match(ATTACHMENT))) {
+    return sendAttachment(response, book, match[1], match[2]);
+  }
   if (request.method === "POST" && path === "/api/comments") {
-    const body = await readBody(request);
+    const body = await readBody(request, COMMENT_BODY_LIMIT);
     const known = await knownLogins({ book, people, seen, user });
     return send(response, 201, await book.comment({ ...body, author: user?.name ?? body.author, login: user?.login ?? LOCAL_LOGIN, people: known, kind: "human" }));
+  }
+  if (request.method === "POST" && (match = path.match(/^\/api\/comments\/([\w-]+)\/delete$/))) {
+    return send(response, 200, await book.deleteComment({ id: match[1], login: user?.login ?? LOCAL_LOGIN }));
   }
   if (request.method === "PATCH" && (match = path.match(/^\/api\/comments\/([\w-]+)$/))) {
     const body = await readBody(request);
@@ -686,6 +711,10 @@ async function shareRoute({ book, base, token, request, response, path, url, mak
   if (request.method === "GET" && (match = path.match(/^\/api\/comments\/([\w-]+)$/))) {
     await book.sharedScreen(share, match[1]);
     return send(response, 200, await book.comments(match[1]));
+  }
+  if (request.method === "GET" && (match = path.match(ATTACHMENT))) {
+    await book.sharedScreen(share, match[1]);
+    return sendAttachment(response, book, match[1], match[2]);
   }
   if (request.method === "POST" && path === "/api/comments") {
     const body = await readBody(request);
@@ -828,7 +857,7 @@ export function createViewerServer({ store, auth = null, live = createLive(), ai
 
   return createServer((request, response) => {
     route(request, response).catch((error) => {
-      const status = error.status ?? (/^only the author/.test(error.message) ? 403 : /^no (screen|proposal|comment|product)|has no version/.test(error.message) ? 404 : 400);
+      const status = error.status ?? (/^only the author/.test(error.message) ? 403 : /^no (screen|proposal|comment|product|image)|has no version/.test(error.message) ? 404 : 400);
       send(response, status, { error: error.message });
     });
   });

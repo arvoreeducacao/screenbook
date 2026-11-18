@@ -13,8 +13,22 @@ function text(value) {
   return { type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) };
 }
 
-function image(png) {
-  return { type: "image", data: png.toString("base64"), mimeType: "image/png" };
+function image(data, mimeType = "image/png") {
+  return { type: "image", data: data.toString("base64"), mimeType };
+}
+
+const COMMENT_IMAGES_SHOWN = 8;
+
+async function commentImages(book, messages) {
+  const wanted = messages.flatMap((message) => (message.images ?? []).map((file) => ({ comment: message.id, author: message.author, screen: message.screen, file: typeof file === "string" ? file : file.file })));
+  const content = [];
+  for (const [index, entry] of wanted.slice(0, COMMENT_IMAGES_SHOWN).entries()) {
+    const found = await book.commentImage(entry.screen, entry.file).catch(() => null);
+    if (!found) continue;
+    content.push(text(`Image ${index + 1} of ${wanted.length}, attached by ${entry.author} to comment ${entry.comment} on ${entry.screen}:`), image(found.data, found.type));
+  }
+  if (wanted.length > COMMENT_IMAGES_SHOWN) content.push(text(`${wanted.length - COMMENT_IMAGES_SHOWN} more images are attached; read_screen on each screen shows its own.`));
+  return content;
 }
 
 function fontWarning(shot) {
@@ -135,7 +149,7 @@ export function buildTools(
 
     read_screen: {
       description:
-        "Read one screen: its HTML, metadata, people's comments, your annotations (listed apart, with any replies to them), and the screenshot of that version when there is one. Defaults to the official version, or the latest one if nothing was approved yet.",
+        "Read one screen: its HTML, metadata, people's comments, your annotations (listed apart, with any replies to them), the screenshot of that version when there is one, and the images people attached to its open comments. Defaults to the official version, or the latest one if nothing was approved yet.",
       input: {
         screen: z.string().describe("screen id, as listed by open_project"),
         version: z.number().int().positive().optional(),
@@ -159,6 +173,8 @@ export function buildTools(
         };
         const content = [text({ meta, version: chosen, links, comments: conversations, annotations }), text(html)];
         if (png) content.push(image(png));
+        const open = conversations.filter((entry) => !entry.resolved && !conversations.find((root) => root.id === entry.replyTo)?.resolved);
+        content.push(...(await commentImages(book, open)));
         return { content };
       },
     },
@@ -224,13 +240,15 @@ export function buildTools(
 
     read_proposal: {
       description:
-        "Read a whole proposal at once: its screens with their versions and status, and every conversation and annotation on them (open ones first), with each reply. Use it before applying comments or reviewing a proposal.",
+        "Read a whole proposal at once: its screens with their versions and status, every conversation and annotation on them (open ones first) with each reply, and the images people attached to the open conversations. Use it before applying comments or reviewing a proposal.",
       input: {
         proposal: z.string().describe("proposal id, as listed by open_project"),
       },
       async run({ proposal }) {
         announce({ action: "reading", proposal: slug(proposal) });
-        return { content: [text(JSON.stringify(fit(await book.proposalThreads(proposal))))] };
+        const threads = await book.proposalThreads(proposal);
+        const open = threads.threads.filter((thread) => !thread.annotation && !thread.resolved).flatMap((thread) => thread.messages.map((message) => ({ ...message, screen: thread.screen })));
+        return { content: [text(JSON.stringify(fit(threads))), ...(await commentImages(book, open))] };
       },
     },
 

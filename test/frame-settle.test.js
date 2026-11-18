@@ -51,3 +51,50 @@ test("a screen answers settle only after its page has loaded and its fonts are r
   assert.equal(answer.id, "s1");
   assert.deepEqual(answer.seen.filter((type) => type === "ready" || type === "settled"), ["ready", "settled"]);
 });
+
+test("a screen measures its pieces only after its page has loaded, so a late image or font does not move them", { skip: !chrome && "no Chrome on this machine" }, async () => {
+  const { createServer } = await import("node:http");
+  const slow = createServer((request, response) => {
+    setTimeout(() => {
+      response.writeHead(200, { "Content-Type": "image/svg+xml" });
+      response.end('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="40"></svg>');
+    }, 400);
+  });
+  await new Promise((resolve) => slow.listen(0, "127.0.0.1", resolve));
+  const dir = await mkdtemp(join(tmpdir(), "screenbook-boxes-"));
+  const store = localStore(dir);
+  const book = new Book(store);
+  await book.init({ name: "CRM" });
+  await book.writeScreen({
+    proposal: "p",
+    name: "Order",
+    section: "Orders",
+    html: `<body style="margin:0"><div style="display:flex"><img src="http://127.0.0.1:${slow.address().port}/logo.svg"><button data-el="resend-link" style="margin:0">Resend</button></div></body>`,
+  });
+  const viewer = createViewerServer({ store, makeThumb: async () => Buffer.from("webp"), takeShot: async () => Buffer.alloc(0) });
+  await new Promise((resolve) => viewer.listen(0, "127.0.0.1", resolve));
+  const { chromium } = await import("playwright-core");
+  const own = await chromium.launch({ executablePath: chrome });
+  try {
+    const page = await own.newPage();
+    const src = `http://127.0.0.1:${viewer.address().port}/api/screens/order/v1.html`;
+    await page.setContent(`<script>
+      window.answer = new Promise((resolve) => {
+        addEventListener("message", (event) => {
+          const frame = document.getElementById("screen");
+          if (!frame || event.source !== frame.contentWindow) return;
+          if (event.data.type === "ready") frame.contentWindow.postMessage({ type: "boxes", id: "b1" }, "*");
+          if (event.data.type === "boxes") resolve(event.data.boxes);
+        });
+        setTimeout(() => resolve(null), 5000);
+      });
+    </script><iframe id="screen" style="width:600px;height:400px;border:0" src="${src}"></iframe>`);
+    const boxes = await page.evaluate(() => window.answer);
+    assert.ok(boxes?.["resend-link"], "the frame answered with the piece's box");
+    assert.equal(Math.round(boxes["resend-link"].left * 600), 300);
+  } finally {
+    await own.close();
+    viewer.close();
+    slow.close();
+  }
+});

@@ -6,6 +6,7 @@ import { homePage, isBoard, pagesOf } from "../viewer/pages.js";
 import { translate } from "../viewer/i18n.js";
 import { emptyBoard, expandOps, nearFilter, summarize } from "../viewer/board-model.js";
 import { SHOT_SCALE, shotStampOf } from "../viewer/shot.js";
+import { ATTACHMENT_FILE, IMAGES_PER_COMMENT, IMAGE_BYTES, IMAGE_TYPES, attachmentPath, imageExtensionOf } from "../viewer/attachments.js";
 
 function pngWidth(png) {
   if (!png || png.length < 24 || png.toString("latin1", 12, 16) !== "IHDR") return null;
@@ -70,6 +71,22 @@ function placePart(id, version, content, attrs) {
 
 function newId() {
   return randomUUID().slice(0, 8);
+}
+
+function isAuthor(entry, login) {
+  return entry?.kind === "human" && Boolean(login) && String(entry.login ?? "").toLowerCase() === String(login).toLowerCase();
+}
+
+function imagesOf(images) {
+  const list = Array.isArray(images) ? images : [];
+  if (list.length > IMAGES_PER_COMMENT) throw new Error(`a comment takes at most ${IMAGES_PER_COMMENT} images`);
+  return list.map((data) => {
+    const bytes = Buffer.isBuffer(data) ? data : Buffer.from(String(data ?? ""), "base64");
+    const extension = imageExtensionOf(bytes);
+    if (!extension) throw new Error("images must be PNG, JPEG, WebP or GIF");
+    if (bytes.length > IMAGE_BYTES) throw new Error(`each image takes at most ${IMAGE_BYTES / 1_000_000} MB`);
+    return { file: `${randomUUID()}.${extension}`, type: IMAGE_TYPES[extension], data: bytes };
+  });
 }
 
 function now() {
@@ -1105,23 +1122,28 @@ export class Book {
     return parseLines(await this.store.read(`comments/${screen}.jsonl`));
   }
 
-  async comment({ screen, el, els, point, version, text, author, login, people = new Set(), kind = "human", category, replyTo }) {
+  async comment({ screen, el, els, point, version, text, author, login, people = new Set(), kind = "human", category, replyTo, images = [] }) {
+    const attached = imagesOf(images);
     return this.saving(`${author} commented on ${screen}`, async () => {
-      if (!text?.trim()) throw new Error("comment is empty");
+      if (!text?.trim() && !attached.length) throw new Error("comment is empty");
       if (!author) throw new Error("comment needs an author");
       await this.screen(screen);
       const earlier = await this.comments(screen);
-      const repeated = [...earlier]
-        .reverse()
-        .find(
-          (earlier) =>
-            earlier.author === author &&
-            earlier.text === text &&
-            earlier.el === (el ?? null) &&
-            earlier.replyTo === (replyTo ?? null) &&
-            Date.now() - new Date(earlier.at).getTime() < REPEAT_WINDOW_MS,
-        );
+      const repeated = attached.length
+        ? null
+        : [...earlier]
+            .reverse()
+            .find(
+              (earlier) =>
+                earlier.author === author &&
+                earlier.text === text &&
+                earlier.el === (el ?? null) &&
+                earlier.replyTo === (replyTo ?? null) &&
+                !earlier.images?.length &&
+                Date.now() - new Date(earlier.at).getTime() < REPEAT_WINDOW_MS,
+            );
       if (repeated) return repeated;
+      for (const image of attached) await this.store.write(attachmentPath(screen, image.file), image.data);
       const entry = {
         id: newId(),
         screen,
@@ -1133,7 +1155,8 @@ export class Book {
         ...(login ? { login: String(login) } : {}),
         kind,
         ...(kind === "annotation" && category?.trim() ? { category: category.trim() } : {}),
-        text,
+        text: text ?? "",
+        ...(attached.length ? { images: attached.map(({ file, type }) => ({ file, type })) } : {}),
         replyTo: replyTo ?? null,
         at: now(),
       };
@@ -1151,7 +1174,7 @@ export class Book {
 
   async notifyChats(entry, handles, at) {
     for (const handle of handles) {
-      const mention = { comment: entry.id, screen: entry.screen, el: entry.el, els: entry.els, version: entry.version, author: entry.author, text: entry.text, at };
+      const mention = { comment: entry.id, screen: entry.screen, el: entry.el, els: entry.els, version: entry.version, author: entry.author, text: entry.text, ...(entry.images?.length ? { images: entry.images.length } : {}), at };
       await this.store.append(`mentions/${handle}.jsonl`, `${JSON.stringify(mention)}\n`);
     }
   }
@@ -1161,9 +1184,8 @@ export class Book {
       const found = await this.findComment(id);
       const entries = await this.comments(found.screen);
       const entry = entries.find((item) => item.id === found.id);
-      const owner = entry.kind === "human" && Boolean(login) && String(entry.login ?? "").toLowerCase() === String(login).toLowerCase();
-      if (!owner) throw new Error("only the author can edit this comment");
-      if (!String(text ?? "").trim()) throw new Error("comment is empty");
+      if (!isAuthor(entry, login)) throw new Error("only the author can edit this comment");
+      if (!String(text ?? "").trim() && !entry.images?.length) throw new Error("comment is empty");
       const asked = chatMentionsIn(entry.text, people);
       entry.text = text;
       entry.edited = now();
@@ -1171,6 +1193,28 @@ export class Book {
       await this.notifyChats(entry, chatMentionsIn(text, people).filter((handle) => !asked.includes(handle)), entry.edited);
       return entry;
     });
+  }
+
+  async deleteComment({ id, login }) {
+    return this.saving(`${login} deleted a comment`, async () => {
+      const found = await this.findComment(id);
+      const entries = await this.comments(found.screen);
+      const entry = entries.find((item) => item.id === found.id);
+      if (!isAuthor(entry, login)) throw new Error("only the author can delete this comment");
+      const gone = entries.filter((item) => item.id === entry.id || (!entry.replyTo && item.replyTo === entry.id));
+      const kept = entries.filter((item) => !gone.includes(item));
+      await this.store.write(`comments/${found.screen}.jsonl`, kept.map((item) => `${JSON.stringify(item)}\n`).join(""));
+      for (const image of gone.flatMap((item) => item.images ?? [])) await this.store.write(attachmentPath(found.screen, image.file), Buffer.alloc(0));
+      return { screen: found.screen, removed: gone.map((item) => item.id), thread: entry.replyTo ? null : entry.id };
+    });
+  }
+
+  async commentImage(screen, file) {
+    if (!ATTACHMENT_FILE.test(String(file))) throw new Error(`no image "${file}"`);
+    const attached = (await this.comments(screen)).some((entry) => entry.images?.some((image) => image.file === file));
+    const data = attached ? await this.store.read(attachmentPath(screen, file)) : null;
+    if (!data?.length) throw new Error(`no image "${file}"`);
+    return { data, type: IMAGE_TYPES[file.split(".").pop()] };
   }
 
   async annotate({ screen, el, text, category, version, author }) {
@@ -1488,7 +1532,7 @@ export class Book {
           el: root.el ?? null,
           version: root.version ?? null,
           resolved: Boolean(root.resolved),
-          messages: [root, ...replies].map((entry) => ({ id: entry.id, author: entry.author, at: entry.at, text: String(entry.text).slice(0, 1200) })),
+          messages: [root, ...replies].map((entry) => ({ id: entry.id, author: entry.author, at: entry.at, text: String(entry.text).slice(0, 1200), ...(entry.images?.length ? { images: entry.images.map((image) => image.file) } : {}) })),
         });
       }
       for (const note of annotations.filter((entry) => !entry.replyTo)) {
