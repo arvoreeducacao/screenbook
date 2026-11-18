@@ -554,3 +554,40 @@ test("a comment refuses images that are not images, too big or too many", async 
   await assert.rejects(book.commentImage("list", "../comments/list.jsonl"), /no image/);
   assert.deepEqual(await book.comments("list"), []);
 });
+
+test("a screen that replaces another lands right after it and keeps the link", async () => {
+  const book = await freshBook();
+  for (const name of ["List", "Detail", "Checkout"]) await book.writeScreen({ proposal: "live", name, section: "Orders", html: `<p>${name}</p>` });
+  await book.approve("live", "Marina");
+  await assert.rejects(book.writeScreen({ proposal: "p", name: "Summary", html: "<p>s</p>", replaces: "nowhere" }), /no screen called "nowhere"/);
+  await assert.rejects(book.writeScreen({ proposal: "p", screen: "detail", html: "<p>d</p>", replaces: "detail" }), /cannot replace itself/);
+  await book.writeScreen({ proposal: "p", name: "Summary", html: "<p>s</p>", replaces: "detail" });
+  const summary = await book.screen("summary");
+  assert.equal(summary.replaces, "detail");
+  assert.equal(summary.section, (await book.screen("detail")).section);
+  assert.deepEqual((await book.project()).sections[0].screens, ["list", "detail", "summary", "checkout"]);
+  assert.equal((await book.proposalThreads("p")).screens[0].replaces, "detail");
+  await book.writeScreen({ proposal: "p", screen: "summary", html: "<p>s</p>", amend: true, replaces: "" });
+  assert.equal((await book.screen("summary")).replaces, undefined);
+});
+
+test("approving a screen that replaces another archives the old one, and undoing brings it back", async () => {
+  const book = await freshBook();
+  for (const name of ["Detail", "Checkout"]) await book.writeScreen({ proposal: "live", name, section: "Orders", html: `<p>${name}</p>` });
+  await book.approve("live", "Marina");
+  await book.writeScreen({ proposal: "p", name: "Summary", html: "<p>s</p>", replaces: "detail" });
+  await book.writeScreen({ proposal: "p", name: "Receipt", html: "<p>r</p>", replaces: "checkout" });
+  await book.writeScreen({ proposal: "p", screen: "checkout", html: "<p>checkout v2</p>" });
+
+  const record = await book.approve("p", "Marina", "summary");
+  assert.equal(record.approved.summary.retired, "detail");
+  assert.deepEqual((({ by, replacedBy }) => ({ by, replacedBy }))((await book.screen("detail")).archived), { by: "Marina", replacedBy: "summary" });
+
+  await book.approve("p", "Marina");
+  assert.equal((await book.screen("checkout")).archived, undefined, "a screen approved in the same go is not archived");
+  assert.equal((await book.screen("checkout")).official, 2);
+
+  await book.reopen("p", "Marina", "summary");
+  assert.equal((await book.screen("detail")).archived, undefined);
+  assert.equal((await book.screen("summary")).official, null);
+});

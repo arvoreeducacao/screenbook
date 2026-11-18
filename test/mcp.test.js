@@ -197,6 +197,17 @@ test("approve makes the proposal official in the agent's name, with the reason",
   assert.equal((await book.screen("list")).official, 1);
 });
 
+test("write_screen links a screen to the one it replaces, open_project shows it, and approve says what it archived", async () => {
+  const { tools } = await setup();
+  await tools.write_screen.run({ proposal: "live", name: "Detail", section: "Orders", html: "<p>a</p>" });
+  await tools.approve.run({ proposal: "live", reason: "live at /deals" });
+  await tools.write_screen.run({ proposal: "p", name: "Summary", html: "<p>b</p>", replaces: "detail" });
+  const overview = JSON.parse((await tools.open_project.run()).content[0].text);
+  assert.ok(overview.layout[0].screens.some((line) => line.startsWith("summary ") && line.endsWith("| replaces detail")));
+  const approved = JSON.parse((await tools.approve.run({ proposal: "p", reason: "live at /deals/summary" })).content[0].text);
+  assert.deepEqual(approved.archivedAsReplaced, ["detail"]);
+});
+
 test("archive takes a screen off the canvas and a new version brings it back", async () => {
   const { book, tools } = await setup();
   await tools.write_screen.run({ proposal: "p", name: "List", section: "Orders", html: "<p>a</p>" });
