@@ -2479,7 +2479,8 @@ function bindMessages(container, where, caret = null) {
         event,
         entries: [
           { label: t("Edit"), run: () => startCommentEdit(id, where) },
-          { label: remove, run: () => deleteComment(id) },
+          null,
+          { label: remove, danger: true, run: () => deleteComment(id) },
         ],
       });
     }),
