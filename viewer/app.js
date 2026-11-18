@@ -83,6 +83,7 @@ const state = {
   showAnnotations: true,
   archivedOpen: false,
   device: "all",
+  scope: "proposal",
   people: new Map(),
   editingComment: null,
   attachments: { note: [], side: [] },
@@ -285,6 +286,27 @@ function renderDeviceFilter() {
   });
 }
 
+function renderScopeFilter() {
+  const filter = $("#scope-filter");
+  filter.hidden = !state.focus || state.view !== "canvas" || isBoard(tabs.current());
+  if (filter.hidden) return;
+  const all = state.focus === "all";
+  filter.querySelectorAll("[data-scope]").forEach((button) => {
+    const on = button.dataset.scope === state.scope;
+    button.classList.toggle("on", on);
+    button.setAttribute("aria-checked", String(on));
+    button.title = button.dataset.scope === "proposal"
+      ? t(all ? "Only the screens of the open proposals" : "Only the screens of this proposal")
+      : t(all ? "The open proposals among the official screens" : "This proposal among the official screens");
+  });
+}
+
+function setScope(scope) {
+  if (scope === state.scope) return;
+  state.scope = scope;
+  focusOn(state.focus);
+}
+
 function setDevice(device) {
   if (device === state.device) return;
   state.device = device;
@@ -320,14 +342,29 @@ function previousVersion(screen, version) {
   return screen.versions.filter((entry) => entry.v < version).at(-1)?.v ?? null;
 }
 
+function replacedOf(screen) {
+  const replaced = screen.replaces ? screenById(screen.replaces) : null;
+  return replaced?.official ? replaced : null;
+}
+
 function compareBase(screen, version) {
   if (screen.official && screen.official !== version) return { version: screen.official, official: true };
+  const replaced = screen.official ? null : replacedOf(screen);
+  if (replaced) return { version: replaced.official, official: true, screen: replaced };
   const previous = previousVersion(screen, version);
   return previous ? { version: previous, official: false } : null;
 }
 
 function compareLabel(base) {
+  if (base.screen) return t("Compare with screen {number}", { number: base.screen.number });
   return base.official ? t("Compare with official") : t("See previous version · v{version}", { version: base.version });
+}
+
+function lineageLabel(item) {
+  if (item.kind !== "proposal") return null;
+  if (item.screen.official) return t("Changes the official one");
+  const replaced = replacedOf(item.screen);
+  return replaced ? t("Replaces screen {number}", { number: replaced.number }) : null;
 }
 
 async function openCompare(item) {
@@ -342,16 +379,19 @@ function focusedProposals() {
   return proposal ? [proposal] : [];
 }
 
+function onlyProposals() {
+  return Boolean(state.focus) && state.scope === "proposal";
+}
+
 function itemsFor(screen) {
+  const pinned = state.focus ? focusedProposals().filter((proposal) => proposal.screens[screen.id]) : [];
   const items = [];
-  if (screen.official) {
+  if (screen.official && (!onlyProposals() || pinned.some((proposal) => proposal.screens[screen.id] === screen.official))) {
     items.push({ screen, version: screen.official, kind: "official" });
   }
-  if (state.focus) {
-    for (const proposal of focusedProposals()) {
-      const version = proposal.screens[screen.id];
-      if (version && version !== screen.official) items.push({ screen, version, kind: "proposal", proposal });
-    }
+  for (const proposal of pinned) {
+    const version = proposal.screens[screen.id];
+    if (version !== screen.official) items.push({ screen, version, kind: "proposal", proposal });
   }
   return items;
 }
@@ -458,17 +498,20 @@ function frameElement(item, x, y) {
   const base = compareBase(item.screen, item.version);
   const waiting = item.kind === "official" && item.version === item.screen.official ? state.data.outdated?.[item.screen.id] : null;
   const flag = waiting?.length ? `<span class="cp-flag" title="${escapeHtml(t("A component of this screen has a newer version: {names}", { names: waiting.map((row) => `${row.part} v${row.latest}`).join(", ") }))}">◆ ${escapeHtml(t("component changed"))}</span>` : "";
+  const lineage = lineageLabel(item);
   const caption = `<span class="num ${item.kind === "official" ? "live" : "prop"}">${item.screen.number}</span><span class="cap-text" title="${escapeHtml(hint)}">${escapeHtml(label)}</span>${flag}`;
-  element.innerHTML = `<div class="cap">${caption}</div><div class="shot"><div class="box" style="width:${FRAME_WIDTH}px;height:${height}px"></div><div class="pins"></div><div class="annos"></div>${
-    base ? `<button type="button" class="prev-btn">${escapeHtml(compareLabel(base))}</button>` : ""
-  }</div>`;
+  const compare = lineage
+    ? `<button type="button" class="lineage" title="${escapeHtml(compareLabel(base))}">${escapeHtml(lineage)}</button>`
+    : base ? `<button type="button" class="prev-btn">${escapeHtml(compareLabel(base))}</button>` : "";
+  element.innerHTML = `<div class="cap">${caption}</div><div class="shot"><div class="box" style="width:${FRAME_WIDTH}px;height:${height}px"></div><div class="pins"></div><div class="annos"></div>${compare}</div>`;
   const box = element.querySelector(".box");
-  const previousButton = element.querySelector(".prev-btn");
-  previousButton?.addEventListener("pointerdown", (event) => event.stopPropagation());
-  previousButton?.addEventListener("click", (event) => {
-    event.stopPropagation();
-    openCompare(item);
-  });
+  for (const button of element.querySelectorAll(".prev-btn, .lineage")) {
+    button.addEventListener("pointerdown", (event) => event.stopPropagation());
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openCompare(item);
+    });
+  }
   attachShot(item, entry, box);
   element.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -514,7 +557,7 @@ function renderCanvas() {
     if (section.id) frame.dataset.section = section.id;
     frame.style.left = "0px";
     frame.style.top = `${y}px`;
-    frame.innerHTML = `<div class="section-head"><span class="section-name">${escapeHtml(section.name)}</span><span class="section-meta"><i class="dot live"></i>${official}${
+    frame.innerHTML = `<div class="section-head"><span class="section-name">${escapeHtml(section.name)}</span><span class="section-meta">${official ? `<i class="dot live"></i>${official}` : ""}${
       proposed ? `<i class="dot prop"></i>${proposed}` : ""
     }</span></div>`;
     frame.querySelector(".section-head").title = `${t(official === 1 ? "{n} official screen" : "{n} official screens", { n: official })}${proposed ? ` · ${t("{n} in proposals", { n: proposed })}` : ""}`;
@@ -667,6 +710,7 @@ function render() {
   renderWaiting();
   renderAnnotationToggle();
   renderDeviceFilter();
+  renderScopeFilter();
   $("#empty").hidden = screens.length > 0;
   tabs.render();
   const onBoard = isBoard(tabs.current());
@@ -1767,6 +1811,7 @@ function archivedMeta(stamp) {
 }
 
 function archivedReason(stamp) {
+  if (stamp?.replacedBy) return `<span class="sb-reason">${escapeHtml(t("Replaced by screen {number}", { number: screenById(stamp.replacedBy)?.number ?? "?" }))}</span>`;
   return stamp?.reason ? `<span class="sb-reason">${escapeHtml(stamp.reason)}</span>` : "";
 }
 
@@ -2182,11 +2227,30 @@ function placeInspector() {
   bar.style.top = `${top}px`;
 }
 
+function retiredBy(screenIds) {
+  return screenIds
+    .map((id) => screenById(id)?.replaces)
+    .filter((id) => id && !screenIds.includes(id))
+    .map(screenById)
+    .filter(Boolean);
+}
+
+const RETIRED_NOTES = {
+  before: ["Screen {numbers} goes to Archived, since a new screen replaces it.", "Screens {numbers} go to Archived, since new screens replace them."],
+  after: ["Screen {numbers} moved to Archived, since a new screen replaces it.", "Screens {numbers} moved to Archived, since new screens replace them."],
+};
+
+function retiredNote(screenIds, when) {
+  const retired = retiredBy(screenIds).map((screen) => screen.number);
+  if (!retired.length) return "";
+  return ` ${t(RETIRED_NOTES[when][retired.length === 1 ? 0 : 1], { numbers: retired.join(", ") })}`;
+}
+
 function confirmApproval(proposal, screens) {
   const names = screens.map((id) => t("screen {number} ({name})", { number: screenById(id)?.number ?? "?", name: screenById(id)?.name ?? id }));
   const dialog = $("#approve-dialog");
   $("#approve-title").textContent = t(names.length === 1 ? "Approve {n} screen as official?" : "Approve {n} screens as official?", { n: names.length });
-  $("#approve-text").textContent = t('From "{title}", these become official: {names}. You can undo it later.', { title: proposal.title, names: names.join(", ") });
+  $("#approve-text").textContent = t('From "{title}", these become official: {names}. You can undo it later.', { title: proposal.title, names: names.join(", ") }) + retiredNote(screens, "before");
   dialog.returnValue = "";
   dialog.showModal();
   $("#approve-cancel").focus();
@@ -2196,11 +2260,12 @@ function confirmApproval(proposal, screens) {
 async function approveScreen(proposal, screen) {
   const name = await ensureName();
   if (!name) return;
+  const note = retiredNote([screen.id], "after");
   await post(`${BASE}/api/proposals/${proposal.id}/approve`, { by: name, screen: screen.id });
   await refresh(true);
   const official = state.placed.find((entry) => entry.item.screen.id === screen.id && entry.item.kind === "official");
   if (official) select(official.item, true);
-  toast(t("Screen {number} is now official.", { number: screen.number }), { label: t("Undo"), run: () => reopenScreen(proposal, screen, true) });
+  toast(t("Screen {number} is now official.", { number: screen.number }) + note, { label: t("Undo"), run: () => reopenScreen(proposal, screen, true) });
 }
 
 async function approveAll(proposal) {
@@ -2209,9 +2274,10 @@ async function approveAll(proposal) {
   if (!name) return;
   const pending = pendingScreens(proposal);
   if (!(await confirmApproval(proposal, pending))) return;
+  const note = retiredNote(pending, "after");
   await post(`${BASE}/api/proposals/${proposal.id}/approve`, { by: name });
   await refresh(true);
-  toast(t(pending.length === 1 ? "{n} screen is now official." : "{n} screens are now official.", { n: pending.length }), { label: t("Undo"), run: () => reopen(proposal, true) });
+  toast(t(pending.length === 1 ? "{n} screen is now official." : "{n} screens are now official.", { n: pending.length }) + note, { label: t("Undo"), run: () => reopen(proposal, true) });
 }
 
 async function reopenScreen(proposal, screen, fromToast = false) {
@@ -3622,6 +3688,7 @@ $("#ov-export").addEventListener("click", openExportMenu);
 
 document.querySelectorAll("#tools [data-tool]").forEach((button) => button.addEventListener("click", () => setTool(button.dataset.tool)));
 document.querySelectorAll("#device-filter [data-device]").forEach((button) => button.addEventListener("click", () => setDevice(button.dataset.device)));
+document.querySelectorAll("#scope-filter [data-scope]").forEach((button) => button.addEventListener("click", () => setScope(button.dataset.scope)));
 
 $("#all-proposals").addEventListener("click", () => focusOn(state.focus === "all" ? null : "all"));
 $("#archived-toggle").addEventListener("click", () => {

@@ -178,11 +178,11 @@ export function createHistory({ base, escapeHtml, timeAgo, frameUrl, shared }) {
     });
   }
 
-  async function diffImage(screen, before, after) {
-    const key = `${screen.id}/${before}/${after}`;
+  async function diffImage(screen, before, after, from = screen) {
+    const key = `${from.id}/${before}/${screen.id}/${after}`;
     if (diffs.has(key)) return diffs.get(key);
     const job = (async () => {
-      const [a, b] = await Promise.all([loadImage(`${base}/api/screens/${screen.id}/v${before}.png`), loadImage(`${base}/api/screens/${screen.id}/v${after}.png`)]);
+      const [a, b] = await Promise.all([loadImage(`${base}/api/screens/${from.id}/v${before}.png`), loadImage(`${base}/api/screens/${screen.id}/v${after}.png`)]);
       if (!a || !b) return null;
       const width = Math.max(a.width, b.width);
       const height = Math.max(a.height, b.height);
@@ -206,23 +206,26 @@ export function createHistory({ base, escapeHtml, timeAgo, frameUrl, shared }) {
 
   function renderCompare(stage, { screen, entry, before, overlay, fit, sideFit }) {
     const mode = overlay.compareMode ?? "slide";
-    const beforeLabel = before.official ? `<i class="dot live"></i> ${t("Official v{v}", { v: before.version })}` : `v${before.version}`;
-    const toolbar = `<div class="hv-toolbar"><span class="seg">${MODES.map(([id, label]) => `<button type="button" data-mode="${id}" class="${mode === id ? "on" : ""}">${t(label)}</button>`).join("")}</span><span class="hv-pair mono">${beforeLabel} → v${overlay.version}</span></div>`;
+    const from = before.screen ?? screen;
+    const officialLabel = before.screen ? t("Screen {number} · official · v{version}", { number: from.number, version: before.version }) : t("Official v{v}", { v: before.version });
+    const beforeLabel = before.official ? `<i class="dot live"></i> ${officialLabel}` : `v${before.version}`;
+    const afterLabel = before.screen ? t("Screen {number} · v{version}", { number: screen.number, version: overlay.version }) : `v${overlay.version}`;
+    const toolbar = `<div class="hv-toolbar"><span class="seg">${MODES.map(([id, label]) => `<button type="button" data-mode="${id}" class="${mode === id ? "on" : ""}">${t(label)}</button>`).join("")}</span><span class="hv-pair mono">${beforeLabel} → ${afterLabel}</span></div>`;
     const sized = (src, width, height, scale, extra = "") =>
       `<iframe src="${src}" style="width:${width}px;height:${height}px;transform:scale(${scale});transform-origin:0 0;${extra}"></iframe>`;
     const scale = fit;
     const width = Math.round(entry.width * scale);
     const height = Math.round(entry.height * scale);
     if (mode === "side") {
-      const beforeEntry = screen.versions.find((item) => item.v === before.version) ?? entry;
+      const beforeEntry = from.versions.find((item) => item.v === before.version) ?? entry;
       const s = sideFit;
       stage.innerHTML = `${toolbar}<div class="hv-side">
-        <figure><figcaption>${beforeLabel}</figcaption><div class="ov-frame" style="width:${Math.round(beforeEntry.width * s)}px;height:${Math.round(beforeEntry.height * s)}px">${sized(frameUrl(screen.id, before.version), beforeEntry.width, beforeEntry.height, s, "position:absolute;left:0;top:0")}</div></figure>
-        <figure><figcaption>v${overlay.version}</figcaption><div class="ov-frame" style="width:${Math.round(entry.width * s)}px;height:${Math.round(entry.height * s)}px">${sized(frameUrl(screen.id, overlay.version), entry.width, entry.height, s, "position:absolute;left:0;top:0")}</div></figure>
+        <figure><figcaption>${beforeLabel}</figcaption><div class="ov-frame" style="width:${Math.round(beforeEntry.width * s)}px;height:${Math.round(beforeEntry.height * s)}px">${sized(frameUrl(from.id, before.version), beforeEntry.width, beforeEntry.height, s, "position:absolute;left:0;top:0")}</div></figure>
+        <figure><figcaption>${afterLabel}</figcaption><div class="ov-frame" style="width:${Math.round(entry.width * s)}px;height:${Math.round(entry.height * s)}px">${sized(frameUrl(screen.id, overlay.version), entry.width, entry.height, s, "position:absolute;left:0;top:0")}</div></figure>
       </div>`;
     } else if (mode === "diff") {
       stage.innerHTML = `${toolbar}<div class="ov-frame hv-diff" style="width:${width}px;height:${height}px"><p class="hint hv-wait">${t("Comparing the pictures…")}</p></div><p class="hv-legend" hidden></p>`;
-      diffImage(screen, before.version, overlay.version).then((result) => {
+      diffImage(screen, before.version, overlay.version, from).then((result) => {
         const frame = stage.querySelector(".hv-diff");
         const legend = stage.querySelector(".hv-legend");
         if (!frame) return;
@@ -235,17 +238,19 @@ export function createHistory({ base, escapeHtml, timeAgo, frameUrl, shared }) {
         frame.innerHTML = `<img src="${result.url}" alt="${t("Difference between the versions")}" style="width:100%;height:100%;display:block">`;
         legend.hidden = false;
         legend.innerHTML = result.boxes.length
-          ? `<i class="hv-key"></i>${t(result.boxes.length === 1 ? "{n} area changed from v{from} to v{to}" : "{n} areas changed from v{from} to v{to}", { n: result.boxes.length, from: before.version, to: overlay.version })}`
+          ? `<i class="hv-key"></i>${before.screen
+              ? t(result.boxes.length === 1 ? "{n} area changed from screen {number}" : "{n} areas changed from screen {number}", { n: result.boxes.length, number: from.number })
+              : t(result.boxes.length === 1 ? "{n} area changed from v{from} to v{to}" : "{n} areas changed from v{from} to v{to}", { n: result.boxes.length, from: before.version, to: overlay.version })}`
           : t("No visible difference between the two versions.");
       });
     } else {
       stage.innerHTML = `${toolbar}<div class="ov-frame compare" style="width:${width}px;height:${height}px;--split:${overlay.split}%">
-        <div class="layer">${sized(frameUrl(screen.id, before.version), entry.width, entry.height, scale)}</div>
+        <div class="layer">${sized(frameUrl(from.id, before.version), entry.width, entry.height, scale)}</div>
         <div class="layer after">${sized(frameUrl(screen.id, overlay.version), entry.width, entry.height, scale)}</div>
         <div class="divider"></div><div class="knob">⇆</div>
         <div class="catch"></div>
         <span class="lab l">${beforeLabel}</span>
-        <span class="lab r">v${overlay.version}</span>
+        <span class="lab r">${afterLabel}</span>
       </div>`;
       const frame = stage.querySelector(".ov-frame");
       const catcher = stage.querySelector(".catch");

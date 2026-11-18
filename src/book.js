@@ -641,7 +641,7 @@ export class Book {
     return html;
   }
 
-  async writeScreen({ proposal, proposalTitle, screen, name, section, route, html, edits, amend = false, width, height, after, variantOf, by = "agent" }) {
+  async writeScreen({ proposal, proposalTitle, screen, name, section, route, html, edits, amend = false, width, height, after, variantOf, replaces, by = "agent" }) {
     return this.saving((saved) => `${by} ${saved?.amended ? "redrew" : "drew"} ${saved?.screen} v${saved?.version} (${saved?.proposal})`, async () => {
       if (!proposal) throw new Error("every drawing goes inside a proposal: pass proposal");
       if (!html?.trim() && !edits?.length) throw new Error("pass html, or edits to change the latest version");
@@ -650,10 +650,12 @@ export class Book {
       if (!id) throw new Error("pass screen (an id) or name");
       const previous = await this.readJson(`screens/${id}/meta.json`);
       const base = variantOf ? await this.variantBase(id, variantOf) : null;
-      if (!previous && !section && !base) throw new Error(`"${id}" is a new screen: pass section so it lands somewhere on the canvas`);
+      const replaced = replaces ? await this.replacedScreen(id, replaces) : null;
+      if (!previous && !section && !base && !replaced) throw new Error(`"${id}" is a new screen: pass section so it lands somewhere on the canvas`);
       const source = edits?.length ? await this.editedHtml(id, previous, edits) : html;
       const parts = await this.pinParts(source);
       const finalHtml = source;
+      if (previous && replaces !== undefined) this.linkReplaced(previous, replaced);
       if (amend) return this.amendLatest({ id, meta: previous, proposalId, html: finalHtml, parts, width, height, by });
       const meta = previous ?? { id, name: name ?? screen, section: null, route: null, official: null, versions: [] };
       if (name) meta.name = name;
@@ -663,6 +665,8 @@ export class Book {
         meta.variantOf = base.id;
         meta.section = base.section;
       }
+      if (!previous) this.linkReplaced(meta, replaced);
+      if (replaced && !meta.section) meta.section = replaced.section;
       delete meta.archived;
       const version = (meta.versions.at(-1)?.v ?? 0) + 1;
       const size = {
@@ -673,6 +677,7 @@ export class Book {
       await this.store.write(`screens/${id}/v${version}.html`, finalHtml);
       await this.writeJson(`screens/${id}/meta.json`, meta);
       if (after !== undefined) await this.place(id, after);
+      else if (replaced && !previous && !base && replaced.section === meta.section) await this.place(id, replaced.id);
 
       const record = (await this.readJson(`proposals/${proposalId}/proposal.json`)) ?? {
         id: proposalId,
@@ -696,6 +701,18 @@ export class Book {
       await this.writeJson(`proposals/${proposalId}/proposal.json`, record);
       return { screen: id, version, proposal: proposalId, ...size };
     });
+  }
+
+  async replacedScreen(id, replaces) {
+    const target = await this.readJson(`screens/${slug(replaces)}/meta.json`);
+    if (!target) throw new Error(`no screen called "${replaces}" to replace`);
+    if (target.id === id) throw new Error(`"${id}" cannot replace itself`);
+    return target;
+  }
+
+  linkReplaced(meta, replaced) {
+    if (replaced) meta.replaces = replaced.id;
+    else delete meta.replaces;
   }
 
   async variantBase(id, variantOf) {
@@ -995,6 +1012,10 @@ export class Book {
         meta.official = record.screens[screenId];
         delete meta.archived;
         await this.writeJson(`screens/${screenId}/meta.json`, meta);
+        const retired = await this.retireReplaced(meta, targets, by);
+        if (!retired) continue;
+        approved[screenId].retired = retired;
+        if (record.screens[retired]) archived.add(retired);
       }
       record.approved = approved;
       delete record.replaced;
@@ -1002,6 +1023,15 @@ export class Book {
       await this.writeJson(`proposals/${record.id}/proposal.json`, record);
       return record;
     });
+  }
+
+  async retireReplaced(meta, approving, by) {
+    if (!meta.replaces || approving.includes(meta.replaces)) return null;
+    const old = await this.readJson(`screens/${meta.replaces}/meta.json`);
+    if (!old || old.archived) return null;
+    old.archived = { by, at: now(), replacedBy: meta.id };
+    await this.writeJson(`screens/${old.id}/meta.json`, old);
+    return old.id;
   }
 
   async archivedScreens(record) {
@@ -1033,6 +1063,11 @@ export class Book {
         if (meta.official === record.screens[screenId]) {
           meta.official = approved[screenId].replaced ?? null;
           await this.writeJson(`screens/${screenId}/meta.json`, meta);
+        }
+        const old = approved[screenId].retired ? await this.readJson(`screens/${approved[screenId].retired}/meta.json`) : null;
+        if (old?.archived?.replacedBy === screenId) {
+          delete old.archived;
+          await this.writeJson(`screens/${old.id}/meta.json`, old);
         }
         delete approved[screenId];
       }
@@ -1542,7 +1577,7 @@ export class Book {
     threads.sort((a, b) => Number(a.resolved ?? false) - Number(b.resolved ?? false) || String(a.messages[0].at).localeCompare(String(b.messages[0].at)));
     return {
       proposal: { id: record.id, title: record.title, status: record.status, createdBy: record.createdBy ?? null, archived: record.archived ?? null },
-      screens: screens.filter(Boolean).map((meta) => ({ id: meta.id, name: meta.name, version: record.screens[meta.id], latest: meta.versions.at(-1)?.v, approved: Boolean(approved[meta.id]), archived: Boolean(meta.archived), variantOf: meta.variantOf ?? null })),
+      screens: screens.filter(Boolean).map((meta) => ({ id: meta.id, name: meta.name, version: record.screens[meta.id], latest: meta.versions.at(-1)?.v, approved: Boolean(approved[meta.id]), archived: Boolean(meta.archived), variantOf: meta.variantOf ?? null, replaces: meta.replaces ?? null })),
       open: threads.filter((thread) => !thread.annotation && !thread.resolved).length,
       threads,
     };

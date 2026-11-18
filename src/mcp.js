@@ -111,7 +111,7 @@ export function buildTools(
         announce({ action: "looking" });
         const { notes, project, screens, proposals, archived, flows, ...rest } = await book.overview(handle);
         const line = (screen) =>
-          `${screen.id} #${screen.number} ${screen.name} | official ${screen.official ? `v${screen.official}` : "none"} | latest v${screen.versions.at(-1)?.v ?? 0}${screen.route ? ` | ${screen.route}` : ""}`;
+          `${screen.id} #${screen.number} ${screen.name} | official ${screen.official ? `v${screen.official}` : "none"} | latest v${screen.versions.at(-1)?.v ?? 0}${screen.route ? ` | ${screen.route}` : ""}${screen.replaces ? ` | replaces ${screen.replaces}` : ""}`;
         const wanted = only ? slug(only) : null;
         const full = Boolean(wanted) || screens.length <= FULL_LAYOUT_SCREENS;
         const layout = arrange(project.sections, screens)
@@ -131,7 +131,7 @@ export function buildTools(
                 store: book.store.describe(),
                 project: { name: project.name, ...(project.head ? { head: project.head } : {}) },
                 screenFormat: full
-                  ? "id #number name | official version | latest version | route"
+                  ? "id #number name | official version | latest version | route | replaces"
                   : "big product: each section lists only ids; call open_project with section to get names, numbers and versions",
                 layout,
                 proposals: proposals.filter((record) => record.status === "open"),
@@ -272,6 +272,10 @@ export function buildTools(
         height: z.number().int().positive().optional(),
         after: z.string().optional().describe('id of the screen this one goes right after in its section, or "start"; without it a new screen goes at the end'),
         variant_of: z.string().optional().describe("id of the screen this one is a state or variation of (empty, error, with or without a piece); it is stacked below that screen, in its section"),
+        replaces: z
+          .string()
+          .optional()
+          .describe("id of the existing screen this new one takes the place of (a screen split in two, two merged, a new route); it goes right after that screen, people see which one it replaces, and approving it archives the old one. To change a screen, draw a new version of it instead. An empty string removes the link"),
       },
       async run(input) {
         announce({
@@ -281,7 +285,7 @@ export function buildTools(
           proposal: slug(input.proposal ?? ""),
           ...(input.section ? { section: slug(input.section) } : {}),
           ...(input.variant_of ? { variantOf: slug(input.variant_of) } : {}),
-          ...(input.after ? { after: slug(input.after) } : {}),
+          ...(input.after || input.replaces ? { after: slug(input.after || input.replaces) } : {}),
         });
         const saved = await book.writeScreen({
           ...input,
@@ -469,7 +473,7 @@ export function buildTools(
 
     approve: {
       description:
-        "Approve a proposal, or one of its screens, in your own name: its versions become the official ones. Approve only what is live in the product exactly as drawn, or what a person told you to approve in this chat. Say in reason what proves it (the route and the PR, or who asked).",
+        "Approve a proposal, or one of its screens, in your own name: its versions become the official ones. Approve only what is live in the product exactly as drawn, or what a person told you to approve in this chat. Say in reason what proves it (the route and the PR, or who asked). A screen that replaces another archives the old one when it is approved; undoing the approval brings the old one back.",
       input: {
         proposal: z.string().describe("proposal id, as listed by open_project"),
         screen: z.string().optional().describe("approve only this screen of the proposal"),
@@ -478,7 +482,9 @@ export function buildTools(
       async run({ proposal, screen, reason }) {
         announce({ action: "approving", proposal: slug(proposal), screen });
         const record = await book.approve(proposal, handle, screen ?? null, reason);
-        return { content: [text({ proposal: record.id, status: record.status, approved: Object.keys(book.approvals(record)) })] };
+        const approvals = book.approvals(record);
+        const retired = Object.values(approvals).map((approval) => approval.retired).filter(Boolean);
+        return { content: [text({ proposal: record.id, status: record.status, approved: Object.keys(approvals), ...(retired.length ? { archivedAsReplaced: retired } : {}) })] };
       },
     },
 
