@@ -932,17 +932,19 @@ export class Book {
     });
   }
 
-  async savePng(id, version, png) {
+  async savePng(id, version, png, drawnAt = null) {
     return this.saving(`screenshot of ${id} v${version}`, async () => {
-      await this.store.write(`screens/${id}/v${version}.png`, png);
       const meta = await this.readJson(`screens/${id}/meta.json`);
       const entry = meta?.versions.find((item) => item.v === version);
-      if (!entry) return;
+      if (drawnAt && entry && entry.at !== drawnAt) return { saved: false };
+      await this.store.write(`screens/${id}/v${version}.png`, png);
+      if (!entry) return { saved: true };
       const width = pngWidth(png);
       if (width && entry.width) entry.shotScale = Math.round(width / entry.width);
       entry.shotOf = entry.at;
       if (entry.parts) entry.shot = await this.shownParts(meta, entry);
       await this.writeJson(`screens/${id}/meta.json`, meta);
+      return { saved: true };
     });
   }
 

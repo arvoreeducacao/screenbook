@@ -108,6 +108,21 @@ test("a redrawn version gets a new stamp, and its card is made from the new draw
   assert.equal((await book.thumb("draft", 1, after)).toString(), "webp:redrawn");
 });
 
+test("a screenshot of a drawing that was redrawn meanwhile is thrown away", async () => {
+  await book.writeScreen({ proposal: "p", name: "Racy", section: "Deals", html: "<body><p>first</p></body>" });
+  await book.savePng("racy", 1, fakePng(2560, "first"));
+  const first = (await book.screen("racy")).versions[0].at;
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await book.writeScreen({ proposal: "p", screen: "racy", html: "<body><p>second</p></body>", amend: true });
+  const second = (await book.screen("racy")).versions[0].at;
+  assert.deepEqual(await book.savePng("racy", 1, fakePng(2560, "late-first"), first), { saved: false });
+  assert.equal(labelOf(await book.png("racy", 1)), "first");
+  assert.equal(await book.shotIsStale("racy", 1), true);
+  assert.deepEqual(await book.savePng("racy", 1, fakePng(2560, "second"), second), { saved: true });
+  assert.equal(labelOf(await book.png("racy", 1)), "second");
+  assert.equal(await book.shotIsStale("racy", 1), false);
+});
+
 test("a screen that does not exist has no thumbnail", async () => {
   const response = await fetch(`${base}/api/screens/nope/v1.thumb.webp`);
   assert.equal(response.status, 404);
