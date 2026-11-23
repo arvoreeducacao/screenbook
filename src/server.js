@@ -343,8 +343,8 @@ function reshoot(book, id, version, needed, takeShot) {
     const entry = (await book.screen(id))?.versions.find((item) => item.v === version);
     if (!entry) return null;
     const png = await takeShot(await book.composedHtml(id, version), { width: entry.width, height: entry.height });
-    await book.savePng(id, version, png);
-    return png;
+    const { saved } = await book.savePng(id, version, png, entry.at);
+    return saved ? png : null;
   });
   shooting = run.catch(() => null);
   return run;

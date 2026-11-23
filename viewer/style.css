@@ -56,6 +56,7 @@
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
+iframe { color-scheme: light; }
 html, body { height: 100%; }
 body { font-family: var(--font); color: var(--ink); background: var(--paper); overflow: hidden; font-size: 13px; }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }

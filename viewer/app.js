@@ -12,7 +12,7 @@ import { arrange } from "./arrange.js";
 import { FLOW, layoutFlow } from "./flow.js";
 import { createTabs } from "./tabs.js";
 import { createLayers } from "./layers.js";
-import { createComponents, partsStamp } from "./components.js";
+import { createComponents, shotStamp } from "./components.js";
 import { SHOT_SCALE } from "./shot.js";
 import { createCardFrames } from "./card-frames.js";
 import { createZoom, wheelZoomFactor } from "./zoom.js";
@@ -408,7 +408,7 @@ function reusableShot(key) {
 }
 
 function attachShot(item, entry, box) {
-  const stamp = partsStamp(state, item.screen, item.version);
+  const stamp = shotStamp(state, item.screen, item.version);
   const key = `${item.screen.id}/v${item.version}${stamp ? `@${stamp}` : ""}`;
   const ready = reusableShot(key);
   if (ready) {
@@ -3281,7 +3281,7 @@ function cardFrameCards() {
   return state.placed.map((placed) => {
     const { item } = placed;
     const entry = versionEntry(item.screen, item.version);
-    const stamp = partsStamp(state, item.screen, item.version);
+    const stamp = shotStamp(state, item.screen, item.version);
     return {
       key: `${item.screen.id}/v${item.version}${stamp ? `@${stamp}` : ""}`,
       screen: item.screen.id,

@@ -615,7 +615,9 @@ export class Book {
   async shotIsStale(id, version) {
     const meta = await this.readJson(`screens/${id}/meta.json`);
     const entry = meta?.versions.find((item) => item.v === version);
-    if (!entry?.parts) return false;
+    if (!entry) return false;
+    if ("shotOf" in entry && entry.shotOf !== entry.at) return true;
+    if (!entry.parts) return false;
     const wanted = await this.shownParts(meta, entry);
     return JSON.stringify(wanted) !== JSON.stringify(entry.shot ?? null);
   }
@@ -822,6 +824,7 @@ export class Book {
     if (Object.keys(parts).length) last.parts = parts;
     else delete last.parts;
     delete last.shot;
+    last.shotOf = null;
     if (width) last.width = width;
     if (height) last.height = height;
     await this.store.write(`screens/${id}/v${last.v}.html`, html);
@@ -929,16 +932,19 @@ export class Book {
     });
   }
 
-  async savePng(id, version, png) {
+  async savePng(id, version, png, drawnAt = null) {
     return this.saving(`screenshot of ${id} v${version}`, async () => {
-      await this.store.write(`screens/${id}/v${version}.png`, png);
       const meta = await this.readJson(`screens/${id}/meta.json`);
       const entry = meta?.versions.find((item) => item.v === version);
-      if (!entry) return;
+      if (drawnAt && entry && entry.at !== drawnAt) return { saved: false };
+      await this.store.write(`screens/${id}/v${version}.png`, png);
+      if (!entry) return { saved: true };
       const width = pngWidth(png);
       if (width && entry.width) entry.shotScale = Math.round(width / entry.width);
+      entry.shotOf = entry.at;
       if (entry.parts) entry.shot = await this.shownParts(meta, entry);
       await this.writeJson(`screens/${id}/meta.json`, meta);
+      return { saved: true };
     });
   }
 
@@ -951,7 +957,7 @@ export class Book {
   async shotStamp(id, version) {
     const meta = await this.readJson(`screens/${id}/meta.json`);
     const entry = meta?.versions.find((item) => item.v === version);
-    return shotStampOf(await this.shownParts(meta, entry));
+    return shotStampOf(await this.shownParts(meta, entry), entry?.at);
   }
 
   thumbPath(id, version, stamp) {

@@ -92,7 +92,7 @@ export function buildTools(
     if (!entry) throw new Error(`screen "${id}" has no version ${version}`);
     const size = mobile ? MOBILE : { width: entry.width, height: entry.height };
     const shot = await render(await book.composedHtml(id, version), size);
-    if (!mobile) await book.savePng(id, version, shot.png);
+    if (!mobile) await book.savePng(id, version, shot.png, entry.at);
     return shot;
   }
 
