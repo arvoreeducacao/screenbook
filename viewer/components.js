@@ -22,8 +22,9 @@ export function shownParts(state, screen, version) {
   return Object.fromEntries(Object.keys(entry.parts).sort().map((name) => [name, follows ? (latest[name] ?? entry.parts[name]) : entry.parts[name]]));
 }
 
-export function partsStamp(state, screen, version) {
-  return shotStampOf(shownParts(state, screen, version));
+export function shotStamp(state, screen, version) {
+  const entry = screen.versions?.find((item) => item.v === version);
+  return shotStampOf(shownParts(state, screen, version), entry?.at);
 }
 
 export function createComponents({ base, state, list, api, post, ensureName, toast, refresh, openScreen, askAi }) {

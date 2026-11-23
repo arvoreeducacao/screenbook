@@ -45,7 +45,7 @@ function fontsNotEmbedded() {
 }
 
 export async function capture(html, { width, height, fullPage = false, scale = SHOT_SCALE } = {}) {
-  const page = await (await browser()).newPage({ viewport: { width, height }, deviceScaleFactor: scale });
+  const page = await (await browser()).newPage({ viewport: { width, height }, deviceScaleFactor: scale, colorScheme: "light" });
   try {
     await page.setContent(html, { waitUntil: "load", timeout: 15000 });
     await page.evaluate(() => document.fonts?.ready);
