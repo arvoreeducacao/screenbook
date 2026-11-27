@@ -166,10 +166,9 @@ code { font-family: var(--mono); font-size: 0.92em; background: var(--sunk); pad
 @keyframes dream-sweep { from { background-position: 100% 0; } to { background-position: 0 0; } }
 @keyframes materialize { from { opacity: 0; filter: blur(14px) saturate(1.8) hue-rotate(-25deg); } 60% { opacity: 1; } to { opacity: 1; filter: none; } }
 @media (prefers-reduced-motion: reduce) { .frame .box.dreaming::before, .frame .box.dreaming::after, .frame .box.revealed .shot-img { animation: none; } }
-.frame.proposal .box { outline: 2px dashed var(--prop); outline-offset: 6px; }
 .frame.proposal .cap { color: var(--prop); font-weight: 600; }
 .frame.selected .box { box-shadow: 0 0 0 2px var(--prop), var(--shadow-card); }
-.frame .shot { position: relative; }
+.frame .shot { position: relative; width: fit-content; }
 .frame .pins { position: absolute; inset: 0; pointer-events: none; }
 .frame .prev-btn { position: absolute; top: 10px; right: 10px; z-index: 3; --btn-scale: min(var(--inv, 1), 2.6); transform: scale(var(--btn-scale)); transform-origin: 100% 0; font: 600 12px var(--font); color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; box-shadow: var(--shadow-card); cursor: pointer; white-space: nowrap; opacity: 0; transition: opacity 0.15s; }
 .frame:hover .prev-btn, .frame .prev-btn:focus-visible { opacity: 1; }
