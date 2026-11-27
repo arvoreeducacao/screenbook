@@ -150,10 +150,10 @@ body { font-size: 12px; letter-spacing: -0.003em; -webkit-font-smoothing: antial
 .section-head { margin-bottom: 6px; padding: 0; border-radius: 0; background: none; box-shadow: none; gap: 6px; }
 .section-name { font-size: 11px; font-weight: 500; color: var(--ink-2); }
 .section-meta { font-size: 11px; font-weight: 400; }
-.frame { --cap-gap: 4px; --chrome-px: min(1px, 1px * var(--inv, 1)); --ring-width: calc(1.5 * var(--chrome-px)); --ring-offset: calc(4 * var(--chrome-px)); --cap-clearance: calc(3 * var(--chrome-px)); }
+.frame { --cap-gap: 4px; --chrome-scale: min(1, var(--inv, 1)); --chrome-px: calc(1px * var(--chrome-scale)); --ring-width: calc(1.5 * var(--chrome-px)); --ring-offset: calc(4 * var(--chrome-px)); --cap-clearance: calc(3 * var(--chrome-px)); }
 .frame .cap { font-size: 11px; font-weight: 400; color: var(--ink-3); margin-bottom: var(--cap-gap); translate: 0 calc(var(--cap-gap) - var(--ring-offset) - var(--ring-width) - var(--cap-clearance)); }
 .frame .box { border-radius: 2px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.06); }
-.frame.proposal .box { outline: var(--ring-width) dashed var(--accent); outline-offset: var(--ring-offset); }
+.frame.proposal .shot::after { content: ""; position: absolute; left: 0; top: 0; width: calc(100% / var(--chrome-scale)); height: calc(100% / var(--chrome-scale)); transform: scale(var(--chrome-scale)); transform-origin: 0 0; border-radius: calc(2px / var(--chrome-scale)); outline: calc(var(--ring-width) / var(--chrome-scale)) dashed var(--accent); outline-offset: calc(var(--ring-offset) / var(--chrome-scale)); pointer-events: none; }
 .frame.proposal .cap { color: var(--accent); font-weight: 500; }
 .frame.selected .box { box-shadow: 0 0 0 calc(1.5px * var(--inv, 1)) var(--accent); }
 .frame.selected .cap { color: var(--accent); }
